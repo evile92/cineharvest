@@ -1,96 +1,100 @@
-# Google Collection Extractor (أداة استخراج أفلام ومسلسلات Google Collection)
+# Google Collection Media Extractor
 
-أداة بايثون احترافية وسريعة مصممة لبيئة **Windows** تعمل على استخراج جميع أسماء الأفلام والمسلسلات الموجودة داخل قوائم ومجموعات **Google Collections** (مثل قائمة المراقبة Watchlist) تلقائيًا وتجاوز الـ Lazy Loading والـ Infinite Scroll، ثم حفظ الأسماء منظفة بدقة في ملف `TXT` وملف `JSON`.
-
----
-
-## المميزات الرئيسية
-- **التمرير الذكي (Smart Infinite Scroll):** تتبع عدد العناصر تلقائيًا والاستمرار في التمرير حتى انتهاء القائمة دون الوقوع في حلقات لا نهائية.
-- **نظام استخراج متعدد الاستراتيجيات (Multi-Strategy Extraction):** عدم الاعتماد على Selector واحد فقط؛ تجربة عناصر الـ DOM، وسِمات `aria-label`، وروابط البحث، وبيانات الصفحة الداخلية.
-- **تنظيف متقدم وتصفية دقيقة:** إزالة أزرار Google UI (مثل Save, Share, Remove, More) وإزالة الترقيم وفك ترميز HTML Entities.
-- **إزالة التكرار مع الحفاظ الصارم على الترتيب:** الاحتفاظ بترتيب الظهور الأصلي للعناصر في القائمة.
-- **دعم كامل لـ UTF-8:** دعم لا تشوبه شائبة للغة العربية والإنجليزية ورموز التشكيل وجميع لغات العالم.
-- **وضع تشخيص المشاكل (`--debug`):** حفظ لقطة شاشة للصفحة `screenshot.png`، وملف الـ HTML الكامل `page.html`، وسجل العمليات `extraction.log`.
-- **معالجة متقدمة للأخطاء:** رسائل إرشادية واضحة لأي مشكلة في الاتصال، تسجيل الدخول، أو CAPTCHA.
+A robust, production-grade Python tool designed to automate the extraction of movie and TV series titles from public **Google Collections** (such as Google Search Watchlists). Powered by **Playwright**, it handles dynamic JavaScript rendering, automated infinite scrolling, data sanitization, and exports clean titles into structured TXT and JSON formats.
 
 ---
 
-## متطلبات التشغيل (Prerequisites)
-1. **نظام التشغيل:** Windows 10 أو Windows 11.
-2. **Python:** إصدار Python 3.10 أو أحدث.
-3. **Playwright Chromium:** متصفح Chromium الخاص بمكتبة Playwright.
+## Features
+
+- **Smart Infinite Scroll:** Dynamically tracks item count plateaus and handles lazy loading without relying on fixed, arbitrary timeouts or falling into infinite loops.
+- **Multi-Strategy Extraction Engine:** Employs a tiered extraction hierarchy (DOM title spans `jsname="r4nke"`, search anchor attributes, card containers, and embedded page state) ensuring resilience against UI layout changes.
+- **Accurate Data Sanitization:** Strips away Google UI buttons (*Save to collection*, *More options*, *Share*, *Remove*) and HTML entities (`&amp;`, `&#39;`) while preserving authentic numbers in titles (e.g., *12 Monkeys*, *28 Days Later*, *1923*).
+- **Order-Preserving Deduplication:** Eliminates duplicate entries while strictly preserving the original chronological appearance in the collection.
+- **Universal UTF-8 Encoding:** Flawless support for international characters, Arabic, accents, and diverse Unicode sets.
+- **Browser Fallback Mechanism:** Automatically utilizes Playwright's Chromium, with automatic fallback to locally installed Google Chrome or Microsoft Edge.
+- **Comprehensive Debug Mode (`--debug`):** Captures full-page screenshots (`debug/screenshot.png`), complete DOM HTML snapshots (`debug/page.html`), and detailed timestamps in `debug/extraction.log`.
+- **Graceful Error Handling:** Provides user-friendly CLI feedback for network drops, private collections requiring authentication, and CAPTCHA alerts.
 
 ---
 
-## خطوات التثبيت والتشغيل السريع (Installation & Quick Start)
+## Prerequisites
 
-افتح موجه الأوامر (PowerShell أو CMD) وانتقل إلى مجلد المشروع:
+- **Python:** 3.10 or newer
+- **Operating System:** Windows, macOS, or Linux
 
-```powershell
-cd google_collection_extractor
-```
+---
 
-### 1. تثبيت المتطلبات (Dependencies):
-```powershell
-pip install -r requirements.txt
-```
+## Installation & Setup
 
-### 2. تثبيت متصفح Chromium الخاص بـ Playwright:
-```powershell
-playwright install chromium
-```
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/evile92/google-collection-extractor.git
+   cd google-collection-extractor
+   ```
 
-### 3. التشغيل المباشر:
-```powershell
+2. **Install Python dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Install the Playwright Chromium browser:**
+   ```bash
+   playwright install chromium
+   ```
+
+---
+
+## Usage
+
+### 1. Default Run (Preconfigured Collection)
+Run the script directly to extract from the default collection URL:
+```bash
 python main.py
 ```
 
----
-
-## خيارات وأوامر التشغيل المتقدمة (CLI Options)
-
-### 1. استخراج أي رابط Google Collection مخصص:
-```powershell
+### 2. Extract Any Custom Google Collection
+Pass any shareable Google Collection URL via the `--url` argument:
+```bash
 python main.py --url "https://www.google.com/collections/s/list/YOUR_LIST_ID/..."
 ```
 
-### 2. تفعيل وضع التشخيص والـ Debug:
-```powershell
+### 3. Diagnostic & Debug Mode
+Run with `--debug` to generate a full-page screenshot, HTML source dump, and detailed execution log:
+```bash
 python main.py --debug
 ```
-يقوم بحفظ لقطة شاشة `debug/screenshot.png` ومصدر الصفحة `debug/page.html` وملف السجل `debug/extraction.log`.
 
-### 3. إظهار نافذة المتصفح (لتسجيل الدخول اليدوي أو حل CAPTCHA):
-إذا كانت المجموعة خاصة أو طلب Google تسجيل الدخول يدويًا:
-```powershell
+### 4. Interactive Browser Window (Solve CAPTCHA or Sign In)
+If the collection is private or requires manual Google sign-in:
+```bash
 python main.py --no-headless
 ```
-سيفتح المتصفح بنافذة مرئية تتيح لك تسجيل الدخول ثم يواصل البرنامج الاستخراج تلقائيًا.
+This launches a visible browser window where you can log in manually; the script will resume extraction once complete.
 
-### 4. تخصيص مدة التمرير والمهلة:
-```powershell
+### 5. Fine-Tuning Scrolling Parameters
+```bash
 python main.py --max-scrolls 150 --scroll-delay 2.0
 ```
 
 ---
 
-## هيكل المشروع (Project Structure)
+## Project Structure
 
 ```
-google_collection_extractor/
+google-collection-extractor/
 │
-├── main.py              # نقطة البداية، معالجة معاملات CLI والطباعة في سطر الأوامر
-├── extractor.py         # محرك Playwright، التمرير اللانهائي، ونظام الاستخراج
-├── cleaner.py           # تنظيف العناوين، إزالة التكرار، والتحقق من الأنواع
-├── config.py            # إعدادات النظام، الثوابت، والمسارات
-├── requirements.txt     # مكتبات بايثون المطلوبة
-├── README.md            # دليل الاستخدام والتوثيق
+├── main.py              # CLI entry point, argument parsing, and workflow execution
+├── extractor.py         # Playwright automation, infinite scroll, and multi-strategy extraction
+├── cleaner.py           # Data cleansing, HTML unescaping, and order-preserving deduplication
+├── config.py            # Global constants, default timeouts, and path definitions
+├── requirements.txt     # Python package requirements (playwright)
+├── README.md            # Documentation and usage guide
 │
-├── output/              # مجلد المخرجات
-│   ├── movies_and_series.txt    # ملف TXT يحتوي على كل عنوان في سطر مستقل
-│   └── movies_and_series.json   # ملف JSON يحتوي على العناوين والروابط
+├── output/              # Extracted datasets
+│   ├── movies_and_series.txt    # Clean, one-per-line plain text list
+│   └── movies_and_series.json   # Structured JSON with title, URL, and media type
 │
-└── debug/               # ملفات التشخيص عند حدوث خطأ أو تفعيل --debug
+└── debug/               # Generated only during errors or when --debug is active
     ├── screenshot.png
     ├── page.html
     └── extraction.log
@@ -98,10 +102,11 @@ google_collection_extractor/
 
 ---
 
-## صيغة المخرجات (Output Format)
+## Output Formats
 
-### ملف `output/movies_and_series.txt`:
-```txt
+### Plain Text (`output/movies_and_series.txt`)
+Each unique title is written to an independent line in UTF-8:
+```text
 The Mentalist
 Fallout
 Marrowbone
@@ -112,41 +117,42 @@ World War II with Tom Hanks
 Widow's Bay
 The Secret Life of Walter Mitty
 From Beijing with Love
-Mindhunters
-Devil
-Force Majeure
-Freaky Friday
-Jerry & Marge Go Large
-RocknRolla
-D-Day
-WarGames
 12 Monkeys
-Rise of the Guardians
+28 Days Later
+1923
 ```
 
-### ملف `output/movies_and_series.json`:
+### JSON Format (`output/movies_and_series.json`)
+Structured metadata representation:
 ```json
 [
   {
     "title": "The Mentalist",
     "url": "https://www.google.com/search?q=The+Mentalist...",
-    "type": "tv"
+    "type": null
   },
   {
     "title": "Fallout",
     "url": "https://www.google.com/search?q=Fallout...",
-    "type": "tv"
+    "type": null
   }
 ]
 ```
+*(Note: `type` defaults to `null` whenever reliable categorization cannot be verified from the collection card)*.
 
 ---
 
-## حل المشاكل الشائعة (Troubleshooting)
+## Troubleshooting
 
-| المشكلة | السبب | الحل المقترح |
+| Issue | Cause | Solution |
 |---|---|---|
-| `Chromium browser is not installed` | لم يتم تحميل متصفح Playwright | نفذ الأمر: `playwright install chromium` |
-| `Google is requesting account sign-in` | القائمة خاصة أو تتطلب حسابًا | شغل البرنامج مع خيار: `python main.py --no-headless` وسجل دخولك في النافذة |
-| `Google returned HTTP status 404` | رابط القائمة غير صحيح أو تم حذفه | تأكد من صحة الرابط وأن خيار المشاركة مفعّل |
-| `UnicodeEncodeError` في Terminal القديم | ترميز سطر الأوامر ليس UTF-8 | يقوم البرنامج تلقائيًا بضبط UTF-8، أو نفذ `chcp 65001` في موجه أوامر Windows |
+| `Chromium browser is not installed` | Missing browser binaries | Run `playwright install chromium` |
+| `Google is requesting account sign-in` | The collection is set to private | Run `python main.py --no-headless` and log in via the browser window |
+| `Google returned HTTP status 404` | Invalid or expired link | Ensure the collection link is public and accessible |
+| `UnicodeEncodeError` in legacy terminals | Terminal output encoding is not UTF-8 | The script auto-configures UTF-8; you can also run `chcp 65001` on Windows |
+
+---
+
+## License
+
+This project is licensed under the MIT License.
