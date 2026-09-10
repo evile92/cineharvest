@@ -44,7 +44,22 @@ A robust, production-grade Python tool designed to automate the extraction of mo
 
 ---
 
-## Usage
+## How to Make Your Google Collection Public
+
+To extract items from your own Google Collection or Watchlist without needing to log in, generate a public share link:
+
+1. Open your collection on [Google Collections / Saved](https://www.google.com/interests/saved).
+2. Click the **Share** button in the top-right corner.
+3. Under **"Who can access"**, switch from *"Only you"* to **"Anyone with link"** (*Anyone with the link can view*).
+4. Click **"Share link"** to copy the URL.
+5. Pass this URL to the tool:
+   ```bash
+   python main.py --url "https://www.google.com/collections/s/list/..."
+   ```
+
+*(Note: If you prefer keeping your collection private, run `python main.py --no-headless` to sign in manually inside the browser window).*
+
+---
 
 ### 1. Default Run (Preconfigured Collection)
 Run the script directly to extract from the default collection URL:
