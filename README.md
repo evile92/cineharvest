@@ -47,6 +47,20 @@ A robust, production-grade Python tool designed to automate the extraction of mo
 
 ---
 
+## Running the Web Application (Streamlit)
+
+You can run the interactive graphical web dashboard locally or deploy it to Streamlit Community Cloud:
+
+```bash
+streamlit run app.py
+```
+- Open `http://localhost:8501` in your browser.
+- Paste any public Google Collection shareable URL.
+- Click **🚀 Extract** to view the live progress, preview results, and download in all formats (TXT, JSON, CSV, Letterboxd, and Markdown).
+
+
+---
+
 ## How to Make Your Google Collection Public
 
 To extract items from your own Google Collection or Watchlist without needing to log in, generate a public share link:
