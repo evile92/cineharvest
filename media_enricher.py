@@ -43,6 +43,37 @@ NUM_MAP = {
     "12": "twelve", "28": "twenty-eight",
 }
 
+GENRE_KEYWORDS = [
+    ("Action", re.compile(r"\b(action)\b", re.I)),
+    ("Adventure", re.compile(r"\b(adventure)\b", re.I)),
+    ("Animation", re.compile(r"\b(animation|animated|anime)\b", re.I)),
+    ("Biography", re.compile(r"\b(biography|biographical|biopic)\b", re.I)),
+    ("Comedy", re.compile(r"\b(comedy|comic|sitcom)\b", re.I)),
+    ("Crime", re.compile(r"\b(crime|gangster|police|mafia)\b", re.I)),
+    ("Documentary", re.compile(r"\b(documentary|docuseries)\b", re.I)),
+    ("Drama", re.compile(r"\b(drama|dramatic)\b", re.I)),
+    ("Fantasy", re.compile(r"\b(fantasy)\b", re.I)),
+    ("History", re.compile(r"\b(historical|history)\b", re.I)),
+    ("Horror", re.compile(r"\b(horror|slasher|supernatural|zombie)\b", re.I)),
+    ("Mystery", re.compile(r"\b(mystery|detective)\b", re.I)),
+    ("Romance", re.compile(r"\b(romance|romantic)\b", re.I)),
+    ("Sci-Fi", re.compile(r"\b(sci-fi|science fiction|space opera|cyberpunk)\b", re.I)),
+    ("Thriller", re.compile(r"\b(thriller|suspense|psychological thriller)\b", re.I)),
+    ("War", re.compile(r"\b(war|military|battle)\b", re.I)),
+    ("Western", re.compile(r"\b(western)\b", re.I)),
+]
+
+
+def detect_genres_from_text(text: str) -> List[str]:
+    """Detect movie/series genres from description or synopsis text."""
+    if not text:
+        return []
+    found = []
+    for g_name, pattern in GENRE_KEYWORDS:
+        if pattern.search(text):
+            found.append(g_name)
+    return found
+
 
 def build_magnet_uri(hash_str: str, title: str, quality: str = "") -> str:
     """Construct a high-availability magnet URI with standard trackers."""
@@ -119,6 +150,7 @@ def fetch_yts_movie_data(title: str) -> Optional[Dict[str, Any]]:
         "rating": best_movie.get("rating"),
         "poster_url": best_movie.get("large_cover_image") or best_movie.get("medium_cover_image"),
         "synopsis": summary,
+        "genres": best_movie.get("genres", []),
         "torrents": torrents_list,
         "imdb_code": best_movie.get("imdb_code"),
         "source": "yts",
@@ -289,6 +321,19 @@ def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
         if ar_summary:
             enriched["synopsis_ar"] = ar_summary
 
+    # 5. Determine Genres
+    item_genres = []
+    if yts_data and yts_data.get("genres"):
+        item_genres = yts_data["genres"]
+    elif enriched.get("synopsis"):
+        item_genres = detect_genres_from_text(enriched["synopsis"])
+
+    if not item_genres:
+        item_genres = ["Drama"] if enriched.get("type") == "tv" else ["Other"]
+
+    enriched["genres"] = item_genres
+    enriched["primary_genre"] = item_genres[0] if item_genres else "Other"
+
     return enriched
 
 
@@ -367,9 +412,17 @@ def search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Di
                 if summary:
                     summary = summary.replace("\n", " ").strip()
 
+                m_genres = m.get("genres") or []
+                if not m_genres and summary:
+                    m_genres = detect_genres_from_text(summary)
+                if not m_genres:
+                    m_genres = ["Other"]
+
                 results.append({
                     "title": m_title,
                     "type": "movie",
+                    "genres": m_genres,
+                    "primary_genre": m_genres[0] if m_genres else "Other",
                     "year": str(m.get("year", "")) if m.get("year") else None,
                     "rating": m.get("rating"),
                     "poster_url": m.get("large_cover_image") or m.get("medium_cover_image"),
@@ -401,9 +454,15 @@ def search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Di
                 w_summary, w_poster = fetch_wikipedia_details(wt)
                 if w_summary or w_poster:
                     media_type = "tv" if "series" in wt.lower() or "season" in wt.lower() else "movie"
+                    w_genres = detect_genres_from_text(w_summary) if w_summary else []
+                    if not w_genres:
+                        w_genres = ["Drama"] if media_type == "tv" else ["Other"]
+
                     results.append({
                         "title": clean_wt,
                         "type": media_type,
+                        "genres": w_genres,
+                        "primary_genre": w_genres[0] if w_genres else "Other",
                         "year": None,
                         "rating": None,
                         "poster_url": w_poster,

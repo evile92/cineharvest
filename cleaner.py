@@ -149,34 +149,92 @@ def detect_media_type(text_or_metadata: Optional[str]) -> Optional[str]:
     return None
 
 
-def export_to_csv(items: List[Dict[str, Any]], path: Any) -> None:
-    """Export items to standard CSV file format including synopsis and download links."""
+GENRE_ICONS = {
+    "Horror": "🩸",
+    "Romance": "💖",
+    "Action": "💥",
+    "Sci-Fi": "🚀",
+    "Drama": "🎭",
+    "Comedy": "😂",
+    "Crime": "🕵️",
+    "Thriller": "⚡",
+    "Adventure": "🗺️",
+    "Animation": "🎨",
+    "Fantasy": "🧙",
+    "Mystery": "🔍",
+    "Documentary": "📹",
+    "Western": "🤠",
+    "War": "⚔️",
+    "Biography": "📖",
+    "History": "🏛️",
+    "Other": "🎞️",
+}
+
+GENRE_ARABIC = {
+    "Horror": "رعب",
+    "Romance": "رومانسي",
+    "Action": "أكشن",
+    "Sci-Fi": "خيال علمي",
+    "Drama": "دراما",
+    "Comedy": "كوميديا",
+    "Crime": "جريمة",
+    "Thriller": "إثارة وتشويق",
+    "Adventure": "مغامرة",
+    "Animation": "رسوم متحركة",
+    "Fantasy": "فانتازيا",
+    "Mystery": "غموض",
+    "Documentary": "وثائقي",
+    "Western": "غرب أمريكي",
+    "War": "حرب",
+    "Biography": "سيرة ذاتية",
+    "History": "تاريخي",
+    "Other": "أعمال متنوعة",
+}
+
+
+def export_to_csv(items: List[Dict[str, Any]], path: Any, lang: str = "en") -> None:
+    """Export items to standard CSV file format grouped by Type and Genre."""
     import csv
     from pathlib import Path
     
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     
+    # Sort items: Movies first, then TV series, then by primary genre, then title
+    sorted_items = sorted(
+        items,
+        key=lambda x: (
+            0 if x.get("type") != "tv" else 1,
+            x.get("primary_genre") or (x.get("genres", ["Other"])[0] if x.get("genres") else "Other"),
+            x.get("title", "").lower()
+        )
+    )
+    
     with open(target, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "Title", "Type", "Year", "Rating", "Synopsis", 
+            "Title", "Type", "Genres", "Year", "Rating", "Synopsis", "Synopsis_AR",
             "TorrentURL_1080p", "MagnetLink_1080p", "TorrentURL_720p", "MagnetLink_720p",
             "GoogleURL", "PosterURL"
         ])
-        for item in items:
+        for item in sorted_items:
             torrents = item.get("torrents", [])
             t_1080 = next((t for t in torrents if t.get("quality") == "1080p"), None)
             t_720 = next((t for t in torrents if t.get("quality") == "720p"), None)
             if not t_1080 and torrents:
                 t_1080 = torrents[0]
 
+            item_genres = item.get("genres") or ([item.get("primary_genre")] if item.get("primary_genre") else [])
+            genres_str = ", ".join(item_genres) if item_genres else ""
+
             writer.writerow([
                 item.get("title", ""),
                 item.get("type") or "",
+                genres_str,
                 item.get("year") or "",
                 item.get("rating") or "",
                 item.get("synopsis") or "",
+                item.get("synopsis_ar") or "",
                 t_1080.get("url") if t_1080 else "",
                 t_1080.get("magnet") if t_1080 else "",
                 t_720.get("url") if t_720 else "",
@@ -208,81 +266,160 @@ def export_to_letterboxd_csv(items: List[Dict[str, Any]], path: Any) -> None:
             ])
 
 
-def export_to_markdown(items: List[Dict[str, Any]], path: Any, collection_title: str = "Google Watchlist") -> None:
-    """Export items to a formatted Markdown checklist with synopsis and download buttons."""
-    from pathlib import Path
+def _format_markdown_item_block(item: Dict[str, Any], lang: str = "en") -> List[str]:
+    """Helper to format a single item block in markdown."""
+    title = item.get("title", "")
+    url = item.get("url")
+    year_str = f" ({item['year']})" if item.get("year") else ""
+    rating_str = f" ⭐ {item['rating']}/10" if item.get("rating") else ""
+    type_str = f" `[{item['type']}]`" if item.get("type") else ""
     
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    link_title = f"[{title}]({url})" if url else title
+    block = [f"- [ ] **{link_title}**{year_str}{type_str}{rating_str}"]
+    
+    # Synopsis in appropriate language
+    synopsis = (item.get("synopsis_ar") if lang == "ar" and item.get("synopsis_ar") else item.get("synopsis"))
+    if synopsis:
+        short_syn = synopsis[:280] + ("..." if len(synopsis) > 280 else "")
+        block.append(f"  > 📖 *{short_syn}*")
+        
+    # Downloads
+    torrents = item.get("torrents", [])
+    if torrents:
+        download_links = []
+        for t in torrents[:3]:
+            q = t.get("quality", "HD")
+            size = f" ({t.get('size')})" if t.get("size") else ""
+            if t.get("magnet"):
+                download_links.append(f"[🧲 Magnet {q}{size}]({t['magnet']})")
+            elif t.get("url"):
+                download_links.append(f"[📥 Torrent {q}{size}]({t['url']})")
+        if download_links:
+            block.append(f"  > 💾 **Downloads:** {' | '.join(download_links)}")
+            
+    block.append("")
+    return block
+
+
+def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Google Watchlist", lang: str = "en") -> str:
+    """Generate a formatted Markdown checklist organized by Type (Movies/Series) and Genre."""
+    movies = [it for it in items if it.get("type") != "tv"]
+    series = [it for it in items if it.get("type") == "tv"]
     
     lines = [
         f"# {collection_title}",
         "",
-        f"> Extracted {len(items)} items using Google Collection Media Extractor.",
-        "",
-        "## Watchlist Checklist & Downloads",
+        f"> Extracted {len(items)} items ({len(movies)} Movies, {len(series)} TV Series) categorized by genre.",
         "",
     ]
     
-    for item in items:
-        title = item.get("title", "")
-        url = item.get("url")
-        year_str = f" ({item['year']})" if item.get("year") else ""
-        rating_str = f" ⭐ {item['rating']}/10" if item.get("rating") else ""
-        type_str = f" `[{item['type']}]`" if item.get("type") else ""
+    # Preferred genre order
+    genre_order = [
+        "Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary",
+        "Drama", "Fantasy", "Horror", "Mystery", "Romance", "Sci-Fi",
+        "Thriller", "War", "Western", "Biography", "History", "Other"
+    ]
+    
+    # Section 1: Movies
+    if movies:
+        m_title = "🎬 Movies (الأفلام)" if lang == "ar" else "🎬 Movies"
+        lines.extend([f"## {m_title}", ""])
         
-        link_title = f"[{title}]({url})" if url else title
-        lines.append(f"- [ ] **{link_title}**{year_str}{type_str}{rating_str}")
+        # Group movies by primary genre
+        movies_by_genre: Dict[str, List[Dict[str, Any]]] = {}
+        for m in movies:
+            g = m.get("primary_genre") or (m.get("genres", ["Other"])[0] if m.get("genres") else "Other")
+            movies_by_genre.setdefault(g, []).append(m)
+            
+        for g_name in genre_order:
+            if g_name in movies_by_genre:
+                g_icon = GENRE_ICONS.get(g_name, "🎞️")
+                g_label = f"{g_name} ({GENRE_ARABIC.get(g_name, '')})" if lang == "ar" else g_name
+                lines.extend([f"### {g_icon} {g_label}", ""])
+                for it in movies_by_genre[g_name]:
+                    lines.extend(_format_markdown_item_block(it, lang=lang))
+                    
+        for g_name, g_items in movies_by_genre.items():
+            if g_name not in genre_order:
+                g_icon = GENRE_ICONS.get(g_name, "🎞️")
+                lines.extend([f"### {g_icon} {g_name}", ""])
+                for it in g_items:
+                    lines.extend(_format_markdown_item_block(it, lang=lang))
+        lines.append("---")
+        lines.append("")
+
+    # Section 2: TV Series
+    if series:
+        s_title = "📺 TV Series (المسلسلات)" if lang == "ar" else "📺 TV Series"
+        lines.extend([f"## {s_title}", ""])
         
-        # Add Synopsis if available
-        synopsis = item.get("synopsis")
-        if synopsis:
-            # Format clean blockquote
-            short_syn = synopsis[:280] + ("..." if len(synopsis) > 280 else "")
-            lines.append(f"  > 📖 *{short_syn}*")
+        series_by_genre: Dict[str, List[Dict[str, Any]]] = {}
+        for s in series:
+            g = s.get("primary_genre") or (s.get("genres", ["Drama"])[0] if s.get("genres") else "Drama")
+            series_by_genre.setdefault(g, []).append(s)
             
-        # Add Download Links if available
-        torrents = item.get("torrents", [])
-        if torrents:
-            download_links = []
-            for t in torrents[:3]:  # Top 3 qualities
-                q = t.get("quality", "HD")
-                size = f" ({t.get('size')})" if t.get("size") else ""
-                if t.get("magnet"):
-                    download_links.append(f"[🧲 Magnet {q}{size}]({t['magnet']})")
-                elif t.get("url"):
-                    download_links.append(f"[📥 Torrent {q}{size}]({t['url']})")
-            if download_links:
-                lines.append(f"  > 💾 **Downloads:** {' | '.join(download_links)}")
-                
-        lines.append("")  # Spacing
-            
+        for g_name in genre_order:
+            if g_name in series_by_genre:
+                g_icon = GENRE_ICONS.get(g_name, "📺")
+                g_label = f"{g_name} ({GENRE_ARABIC.get(g_name, '')})" if lang == "ar" else g_name
+                lines.extend([f"### {g_icon} {g_label}", ""])
+                for it in series_by_genre[g_name]:
+                    lines.extend(_format_markdown_item_block(it, lang=lang))
+                    
+        for g_name, g_items in series_by_genre.items():
+            if g_name not in genre_order:
+                g_icon = GENRE_ICONS.get(g_name, "📺")
+                lines.extend([f"### {g_icon} {g_name}", ""])
+                for it in g_items:
+                    lines.extend(_format_markdown_item_block(it, lang=lang))
+        lines.append("---")
+        lines.append("")
+
+    # Section 3: Detailed Table
     lines.extend([
         "## Detailed Table",
         "",
-        "| # | Title | Type | Year | Rating | Links |",
-        "|---|---|---|---|---|---|",
+        "| # | Title | Type | Genre | Year | Rating | Links |",
+        "|---|---|---|---|---|---|---|",
     ])
     
-    for idx, item in enumerate(items, 1):
+    sorted_all = sorted(
+        items,
+        key=lambda x: (
+            0 if x.get("type") != "tv" else 1,
+            x.get("primary_genre") or "Other",
+            x.get("title", "").lower()
+        )
+    )
+    for idx, item in enumerate(sorted_all, 1):
         title = item.get("title", "")
         media_type = item.get("type") or "-"
+        p_genre = item.get("primary_genre") or (item.get("genres", ["-"])[0] if item.get("genres") else "-")
         year = item.get("year") or "-"
         rating = f"⭐ {item['rating']}" if item.get("rating") else "-"
         url = item.get("url")
         
         actions = []
         if url:
-            actions.append(f"[Google]({url})")
+            actions.append(f"[Link]({url})")
         torrents = item.get("torrents", [])
         if torrents and torrents[0].get("magnet"):
             actions.append(f"[🧲 Magnet]({torrents[0]['magnet']})")
             
         actions_str = " \\| ".join(actions) if actions else "-"
-        lines.append(f"| {idx} | **{title}** | `{media_type}` | {year} | {rating} | {actions_str} |")
+        lines.append(f"| {idx} | **{title}** | `{media_type}` | `{p_genre}` | {year} | {rating} | {actions_str} |")
         
     lines.append("")
+    return "\n".join(lines)
+
+
+def export_to_markdown(items: List[Dict[str, Any]], path: Any, collection_title: str = "Google Watchlist", lang: str = "en") -> None:
+    """Export items to a formatted Markdown checklist organized by Type (Movies/Series) and Genre."""
+    from pathlib import Path
+    
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        f.write(generate_markdown(items, collection_title=collection_title, lang=lang))
 
 

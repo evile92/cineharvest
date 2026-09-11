@@ -60,6 +60,7 @@ from extractor import (
     ExtractionError,
 )
 from media_enricher import enrich_media_items, search_media_database
+from cleaner import generate_markdown, GENRE_ICONS, GENRE_ARABIC
 from tmdb import enrich_items_with_tmdb
 
 # --- BILINGUAL TRANSLATIONS ---
@@ -124,6 +125,9 @@ TRANSLATIONS = {
         "synopsis_label": "Synopsis:",
         "filter_type": "Filter by type:",
         "all_types": "All",
+        "genre_label": "Genre",
+        "filter_genre": "Filter by Genre:",
+        "all_genres": "All Genres",
         "search_box": "🔍 Search within extracted titles:",
         # Direct Search Feature
         "direct_search_title": "🔍 Search Movies & TV Series Database",
@@ -195,6 +199,9 @@ TRANSLATIONS = {
         "synopsis_label": "نبذة عن العمل:",
         "filter_type": "تصفية حسب النوع:",
         "all_types": "الكل",
+        "genre_label": "التصنيف الفني",
+        "filter_genre": "تصفية حسب التصنيف الفني:",
+        "all_genres": "جميع التصنيفات",
         "search_box": "🔍 بحث في العناوين المستخرجة:",
         # Direct Search Feature
         "direct_search_title": "🔍 البحث في قواعد بيانات الأفلام والمسلسلات",
@@ -445,20 +452,32 @@ def generate_csv(items: List[Dict[str, Any]], lang: str = "en") -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Title", "Type", "Year", "Rating", "Synopsis", "Synopsis_AR",
+        "Title", "Type", "Genres", "Year", "Rating", "Synopsis", "Synopsis_AR",
         "TorrentURL_1080p", "MagnetLink_1080p", "TorrentURL_720p", "MagnetLink_720p",
         "GoogleURL", "PosterURL"
     ])
-    for item in items:
+    # Group and sort: Movies first, TV series second, then by genre and title
+    sorted_items = sorted(
+        items,
+        key=lambda x: (
+            0 if x.get("type") != "tv" else 1,
+            x.get("primary_genre") or (x.get("genres", ["Other"])[0] if x.get("genres") else "Other"),
+            x.get("title", "").lower()
+        )
+    )
+    for item in sorted_items:
         torrents = item.get("torrents", [])
         t_1080 = next((x for x in torrents if x.get("quality") == "1080p"), None)
         t_720 = next((x for x in torrents if x.get("quality") == "720p"), None)
         if not t_1080 and torrents:
             t_1080 = torrents[0]
 
+        genres_str = ", ".join(item.get("genres", [])) if item.get("genres") else (item.get("primary_genre") or "")
+
         writer.writerow([
             item.get("title", ""),
             item.get("type") or "",
+            genres_str,
             item.get("year") or "",
             item.get("rating") or "",
             item.get("synopsis") or "",
@@ -484,68 +503,6 @@ def generate_letterboxd_csv(items: List[Dict[str, Any]]) -> str:
             item.get("url") or "",
         ])
     return output.getvalue()
-
-
-def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Google Watchlist", lang: str = "en") -> str:
-    lines = [
-        f"# {collection_title}",
-        "",
-        f"> Extracted {len(items)} items using CineHarvest Media Extractor.",
-        "",
-        "## Watchlist Checklist & Downloads",
-        "",
-    ]
-    for item in items:
-        title = item.get("title", "")
-        url = item.get("url")
-        year_str = f" ({item['year']})" if item.get("year") else ""
-        rating_str = f" ⭐ {item['rating']}/10" if item.get("rating") else ""
-        type_str = f" `[{item['type']}]`" if item.get("type") else ""
-
-        link_title = f"[{title}]({url})" if url else title
-        lines.append(f"- [ ] **{link_title}**{year_str}{type_str}{rating_str}")
-
-        synopsis = get_synopsis_text(item, lang)
-        if synopsis:
-            short_syn = synopsis[:280] + ("..." if len(synopsis) > 280 else "")
-            lines.append(f"  > 📖 *{short_syn}*")
-
-        torrents = item.get("torrents", [])
-        if torrents:
-            download_links = []
-            for tr in torrents[:3]:
-                q = tr.get("quality", "HD")
-                size = f" ({tr.get('size')})" if tr.get("size") else ""
-                if tr.get("magnet"):
-                    download_links.append(f"[🧲 Magnet {q}{size}]({tr['magnet']})")
-                elif tr.get("url"):
-                    download_links.append(f"[📥 Torrent {q}{size}]({tr['url']})")
-            if download_links:
-                lines.append(f"  > 💾 **Downloads:** {' | '.join(download_links)}")
-        lines.append("")
-
-    lines.extend([
-        "## Detailed Table",
-        "",
-        "| # | Title | Type | Year | Rating | Links |",
-        "|---|---|---|---|---|---|",
-    ])
-    for idx, item in enumerate(items, 1):
-        title = item.get("title", "")
-        media_type = item.get("type") or "-"
-        year = item.get("year") or "-"
-        rating = f"⭐ {item['rating']}" if item.get("rating") else "-"
-        url = item.get("url")
-        actions = []
-        if url:
-            actions.append(f"[Link]({url})")
-        torrents = item.get("torrents", [])
-        if torrents and torrents[0].get("magnet"):
-            actions.append(f"[🧲 Magnet]({torrents[0]['magnet']})")
-        actions_str = " \\| ".join(actions) if actions else "-"
-        lines.append(f"| {idx} | **{title}** | `{media_type}` | {year} | {rating} | {actions_str} |")
-
-    return "\n".join(lines)
 
 
 # ==============================================================================
@@ -690,11 +647,13 @@ if st.session_state.app_mode == "collection":
                     with col_info:
                         r_type = rand_item.get("type")
                         type_badge = t.get(r_type, r_type.upper() if r_type else "")
+                        p_genre = rand_item.get("primary_genre") or (rand_item.get("genres", [None])[0] if rand_item.get("genres") else None)
+                        genre_disp = f" • {GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre else ""
                         year_badge = f"({rand_item['year']})" if rand_item.get("year") else ""
                         rating_badge = f"⭐ {rand_item['rating']}/10" if rand_item.get("rating") else ""
 
                         st.markdown(f"### 🎯 {rand_item.get('title', '')} {year_badge}")
-                        st.markdown(f"`{type_badge}` &nbsp;&nbsp; **{rating_badge}**")
+                        st.markdown(f"`{type_badge}`{genre_disp} &nbsp;&nbsp; **{rating_badge}**")
 
                         item_syn = get_synopsis_text(rand_item, st.session_state.lang)
                         if item_syn:
@@ -760,11 +719,29 @@ if st.session_state.app_mode == "collection":
         st.markdown("---")
         st.subheader(t["preview_header"])
 
-        col_f1, col_f2 = st.columns([1, 2])
+        col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
         with col_f1:
             type_opts = [t["all_types"], t["movie"], t["tv"]]
             filter_val = st.selectbox(t["filter_type"], options=type_opts, index=0)
         with col_f2:
+            all_extracted_genres = set()
+            for it in items:
+                for g in it.get("genres", []):
+                    if g:
+                        all_extracted_genres.add(g)
+                if it.get("primary_genre"):
+                    all_extracted_genres.add(it["primary_genre"])
+            genre_list = sorted(list(all_extracted_genres))
+            genre_display_opts = [t["all_genres"]] + [
+                f"{GENRE_ICONS.get(g, '🎬')} {GENRE_ARABIC.get(g, g) if st.session_state.lang == 'ar' else g}"
+                for g in genre_list
+            ]
+            genre_map = {
+                f"{GENRE_ICONS.get(g, '🎬')} {GENRE_ARABIC.get(g, g) if st.session_state.lang == 'ar' else g}": g
+                for g in genre_list
+            }
+            selected_genre_display = st.selectbox(t["filter_genre"], options=genre_display_opts, index=0)
+        with col_f3:
             search_query = st.text_input(t["search_box"], value="", placeholder="e.g. Inception, Breaking Bad...")
 
         filtered_items = items
@@ -772,6 +749,14 @@ if st.session_state.app_mode == "collection":
             filtered_items = [x for x in filtered_items if x.get("type") == "movie"]
         elif filter_val == t["tv"]:
             filtered_items = [x for x in filtered_items if x.get("type") == "tv"]
+
+        if selected_genre_display != t["all_genres"]:
+            chosen_genre = genre_map.get(selected_genre_display)
+            if chosen_genre:
+                filtered_items = [
+                    x for x in filtered_items
+                    if chosen_genre in x.get("genres", []) or x.get("primary_genre") == chosen_genre
+                ]
 
         if search_query.strip():
             q = search_query.strip().lower()
@@ -805,7 +790,9 @@ if st.session_state.app_mode == "collection":
 
                                 c_type = it.get("type")
                                 badge_text = t.get(c_type, c_type.upper() if c_type else "")
-                                st.caption(f"`{badge_text}` {rating_str}")
+                                p_genre = it.get("primary_genre") or (it.get("genres", [None])[0] if it.get("genres") else None)
+                                genre_badge = f" • {GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre else ""
+                                st.caption(f"`{badge_text}`{genre_badge} {rating_str}")
 
                                 syn_text = get_synopsis_text(it, st.session_state.lang)
                                 if syn_text:
@@ -823,9 +810,12 @@ if st.session_state.app_mode == "collection":
                 it_torrents = it.get("torrents", [])
                 has_magnet = bool(it_torrents and it_torrents[0].get("magnet"))
                 syn_text = get_synopsis_text(it, st.session_state.lang)
+                p_genre = it.get("primary_genre") or (it.get("genres", ["-"])[0] if it.get("genres") else "-")
+                genre_str = f"{GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre != "-" else "-"
                 table_rows.append({
                     "Title": it.get("title", ""),
                     "Type": it.get("type") or "-",
+                    "Genre": genre_str,
                     "Year": it.get("year") or "-",
                     "Rating": f"⭐ {it['rating']}" if it.get("rating") else "-",
                     "Synopsis": (syn_text[:90] + "...") if syn_text else "-",
@@ -939,7 +929,9 @@ elif st.session_state.app_mode == "search":
 
                             c_type = item.get("type")
                             badge_text = t.get(c_type, c_type.upper() if c_type else "")
-                            st.caption(f"`{badge_text}` {rating_str}")
+                            p_genre = item.get("primary_genre") or (item.get("genres", [None])[0] if item.get("genres") else None)
+                            genre_badge = f" • {GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre else ""
+                            st.caption(f"`{badge_text}`{genre_badge} {rating_str}")
 
                             syn_text = get_synopsis_text(item, st.session_state.lang)
                             if syn_text:
