@@ -1,8 +1,10 @@
-"""Google Collection Media Extractor - Web Application.
+"""Google Collection Media Extractor & Universal Search (CineHarvest).
 
-A bilingual (Arabic/English) web interface for extracting movie and TV series
-titles from Google Collections, enriching them with YTS torrents, magnet links,
-Wikipedia/TMDB plot synopses, poster images, and an interactive random watch picker.
+A bilingual (Arabic/English) web application for:
+1. Extracting movies & TV shows from public Google Collections/Watchlists.
+2. Direct database search across YTS, Wikipedia, and TMDB by title.
+3. Automatic enrichment with posters, magnet/torrent links, and bilingual (AR/EN) synopses.
+4. Interactive random watch recommendations.
 """
 
 import io
@@ -20,7 +22,7 @@ import streamlit as st
 
 # Configure page settings
 st.set_page_config(
-    page_title="CineHarvest - Google Collection Extractor",
+    page_title="CineHarvest - Media Extractor & Movie Search",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -57,19 +59,94 @@ from extractor import (
     setup_network_interception,
     ExtractionError,
 )
-from media_enricher import enrich_media_items
+from media_enricher import enrich_media_items, search_media_database
 from tmdb import enrich_items_with_tmdb
 
 # --- BILINGUAL TRANSLATIONS ---
 TRANSLATIONS = {
+    "en": {
+        "page_title": "CineHarvest - Media Extractor & Movie Search",
+        "app_title": "🎬 CineHarvest - Media Extractor & Search",
+        "app_subtitle": "Universal entertainment hub: extract from **Google Watchlists** or **search any movie/series directly** to get official posters, plot synopses (Arabic & English), and high-speed **Magnet & Torrent download links**.",
+        "nav_header": "🧭 Navigation & Mode",
+        "mode_label": "Select Feature:",
+        "mode_collection": "📂 Google Collection Extractor",
+        "mode_search": "🔍 Direct Movie & Series Search",
+        "config_header": "⚙️ Configuration",
+        "lang_select": "🌐 Language / اللغة",
+        "fetch_enrichment": "📥 Fetch Downloads, Synopses & Posters",
+        "fetch_enrichment_help": "Queries free YTS & EZTV APIs for torrent/magnet links, and Wikipedia for bilingual plot synopses and posters.",
+        "tmdb_label": "TMDB API Key (Optional)",
+        "tmdb_help": "Enriches with official TMDB ratings, 4K posters, and exact metadata (completely optional).",
+        "advanced_settings": "🛠️ Advanced Scraper Settings",
+        "max_scrolls": "Max Scrolls",
+        "scroll_delay": "Scroll Delay (seconds)",
+        "url_label": "Google Collection Shareable URL:",
+        "url_placeholder": "https://www.google.com/interests/saved/collection/...",
+        "btn_extract": "🚀 Start Extraction",
+        "invalid_url": "Please enter a valid Google Collection URL.",
+        "status_title": "Extracting collection...",
+        "status_launching": "🌐 Launching headless Chromium browser...",
+        "status_navigating": "🔗 Navigating to collection URL...",
+        "status_scrolling": "📜 Scrolling page to load all items...",
+        "status_discovered": "📜 Discovered **{count}** items so far...",
+        "status_extracting": "🔍 Extracting titles, sanitizing, and deduplicating...",
+        "status_enriching": "🎬 Fetching download links, synopses, and posters...",
+        "status_enrich_progress": "Enriching: {cur}/{tot} items",
+        "status_tmdb": "✨ Enriching with TMDB metadata...",
+        "status_complete": "✅ Extraction & Enrichment Complete!",
+        "status_error": "❌ Extraction Failed",
+        "metric_discovered": "Discovered Items",
+        "metric_duplicates": "Duplicates Removed",
+        "metric_unique": "Unique Titles",
+        "metric_strategy": "Strategy Used",
+        "export_header": "📥 Export & Downloads",
+        "btn_txt": "📄 Download TXT",
+        "btn_json": "📊 Download JSON",
+        "btn_csv": "📑 Download CSV",
+        "btn_letterboxd": "🎟️ Letterboxd CSV",
+        "btn_md": "📝 Markdown Checklist",
+        "random_box_title": "🎲 Unsure What to Watch? Pick for Me!",
+        "random_box_desc": "Click the button below to shuffle the collection and get an instant recommendation with full synopsis and download buttons.",
+        "random_btn": "🎲 Pick a Random Movie / Series to Watch!",
+        "preview_header": "📋 Collection Results",
+        "tab_cards": "🖼️ Cards & Posters View",
+        "tab_table": "📊 Comprehensive Table View",
+        "tab_md": "📝 Markdown Preview",
+        "download_links": "Direct Downloads:",
+        "no_downloads": "No torrents found currently",
+        "view_on_google": "🔗 Open in Google",
+        "rating_label": "Rating",
+        "year_label": "Year",
+        "type_label": "Type",
+        "movie": "Movie",
+        "tv": "TV Series",
+        "synopsis_label": "Synopsis:",
+        "filter_type": "Filter by type:",
+        "all_types": "All",
+        "search_box": "🔍 Search within extracted titles:",
+        # Direct Search Feature
+        "direct_search_title": "🔍 Search Movies & TV Series Database",
+        "direct_search_desc": "Search by title to fetch official posters, plot synopses (Arabic & English), and direct Magnet & Torrent download links.",
+        "direct_input_label": "Movie or Series Name:",
+        "direct_input_placeholder": "e.g. Interstellar, Oppenheimer, Breaking Bad, Gladiator...",
+        "btn_direct_search": "🔍 Search Database",
+        "direct_status_searching": "Searching free databases (YTS, Wikipedia, EZTV)...",
+        "direct_results_count": "Found **{count}** matching results:",
+        "direct_no_results": "No results found for this title. Try a different spelling or keyword.",
+    },
     "ar": {
-        "page_title": "مستخرج وسائط مجموعات جوجل",
-        "app_title": "🎬 مستخرج وسائط مجموعات جوجل (CineHarvest)",
-        "app_subtitle": "استخراج تلقائي للأفلام والمسلسلات من أي **قائمة جوجل (Google Collection / Watchlist)** مع جلب **روابط التحميل المباشرة والتورنت (YTS / EZTV)**، **نبذة القصة**، و**صور البوستر الرسمية**.",
+        "page_title": "CineHarvest - مستخرج وسائط وباحث الأفلام",
+        "app_title": "🎬 CineHarvest - مستخرج وباحث الأفلام والمسلسلات",
+        "app_subtitle": "منصة وسائط متكاملة: استخراج أفلام ومسلسلات من **قوائم جوجل (Google Watchlists)** أو **البحث المباشر بالاسم عن أي فيلم أو مسلسل** مع البوسترات الرسمية، ملخص القصة (باللغة العربية والإنجليزية)، و**روابط التحميل والتورنت المباشرة**.",
+        "nav_header": "🧭 التنقل والأوضاع",
+        "mode_label": "اختر وضع العمل:",
+        "mode_collection": "📂 استخراج مجموعات جوجل (Google Collections)",
+        "mode_search": "🔍 البحث المباشر في قواعد البيانات (Direct Search)",
         "config_header": "⚙️ الإعدادات والخيارات",
         "lang_select": "🌐 اللغة / Language",
         "fetch_enrichment": "📥 جلب الروابط والبوسترات والقصة",
-        "fetch_enrichment_help": "البحث في واجهات YTS و EZTV لجلب روابط التورنت والماغنت، وملخص القصة والصور من ويكيبيديا مجاناً 100%.",
+        "fetch_enrichment_help": "البحث في واجهات YTS و EZTV لجلب روابط التورنت والماغنت، وملخص القصة العربي والإنجليزي من ويكيبيديا مجاناً.",
         "tmdb_label": "مفتاح TMDB API (اختياري)",
         "tmdb_help": "لجلب بوسترات 4K فائقة الدقة وتقييمات TMDB الرسمية (اختياري تماماً).",
         "advanced_settings": "🛠️ إعدادات التمرير المتقدمة",
@@ -119,76 +196,31 @@ TRANSLATIONS = {
         "filter_type": "تصفية حسب النوع:",
         "all_types": "الكل",
         "search_box": "🔍 بحث في العناوين المستخرجة:",
-    },
-    "en": {
-        "page_title": "Google Collection Media Extractor",
-        "app_title": "🎬 Google Collection Media Extractor (CineHarvest)",
-        "app_subtitle": "Automatically extract movies and TV shows from any **Google Collection / Watchlist**, enriched with **YTS / EZTV download & magnet links**, **plot synopses**, and **official posters**.",
-        "config_header": "⚙️ Configuration",
-        "lang_select": "🌐 Language / اللغة",
-        "fetch_enrichment": "📥 Fetch Downloads, Synopses & Posters",
-        "fetch_enrichment_help": "Searches free YTS & EZTV APIs for torrent/magnet links, and Wikipedia for plot summaries & posters (100% free, no key required).",
-        "tmdb_label": "TMDB API Key (Optional)",
-        "tmdb_help": "Enriches with official TMDB ratings, 4K posters, and exact metadata (completely optional).",
-        "advanced_settings": "🛠️ Advanced Scraper Settings",
-        "max_scrolls": "Max Scrolls",
-        "scroll_delay": "Scroll Delay (seconds)",
-        "url_label": "Google Collection Shareable URL:",
-        "url_placeholder": "https://www.google.com/interests/saved/collection/...",
-        "btn_extract": "🚀 Start Extraction",
-        "invalid_url": "Please enter a valid Google Collection URL.",
-        "status_title": "Extracting collection...",
-        "status_launching": "🌐 Launching headless Chromium browser...",
-        "status_navigating": "🔗 Navigating to collection URL...",
-        "status_scrolling": "📜 Scrolling page to load all items...",
-        "status_discovered": "📜 Discovered **{count}** items so far...",
-        "status_extracting": "🔍 Extracting titles, sanitizing, and deduplicating...",
-        "status_enriching": "🎬 Fetching download links, synopses, and posters...",
-        "status_enrich_progress": "Enriching: {cur}/{tot} items",
-        "status_tmdb": "✨ Enriching with TMDB metadata...",
-        "status_complete": "✅ Extraction & Enrichment Complete!",
-        "status_error": "❌ Extraction Failed",
-        "metric_discovered": "Discovered Items",
-        "metric_duplicates": "Duplicates Removed",
-        "metric_unique": "Unique Titles",
-        "metric_strategy": "Strategy Used",
-        "export_header": "📥 Export & Downloads",
-        "btn_txt": "📄 Download TXT",
-        "btn_json": "📊 Download JSON",
-        "btn_csv": "📑 Download CSV",
-        "btn_letterboxd": "🎟️ Letterboxd CSV",
-        "btn_md": "📝 Markdown Checklist",
-        "random_box_title": "🎲 Unsure What to Watch? Pick for Me!",
-        "random_box_desc": "Click the button below to shuffle the collection and get an instant recommendation with full synopsis and download buttons.",
-        "random_btn": "🎲 Pick a Random Movie / Series to Watch!",
-        "preview_header": "📋 Results Preview",
-        "tab_cards": "🖼️ Cards & Posters View",
-        "tab_table": "📊 Comprehensive Table View",
-        "tab_md": "📝 Markdown Preview",
-        "download_links": "Direct Downloads:",
-        "no_downloads": "No torrents found currently",
-        "view_on_google": "🔗 Open in Google",
-        "rating_label": "Rating",
-        "year_label": "Year",
-        "type_label": "Type",
-        "movie": "Movie",
-        "tv": "TV Series",
-        "synopsis_label": "Synopsis:",
-        "filter_type": "Filter by type:",
-        "all_types": "All",
-        "search_box": "🔍 Search titles:",
+        # Direct Search Feature
+        "direct_search_title": "🔍 البحث في قواعد بيانات الأفلام والمسلسلات",
+        "direct_search_desc": "ابحث بالاسم عن أي فيلم أو مسلسل لجلب البوستر الرسمي، ملخص القصة بالعربية، وروابط تحميل Magnet و Torrent مباشرة.",
+        "direct_input_label": "اسم الفيلم أو المسلسل:",
+        "direct_input_placeholder": "مثال: Interstellar, Oppenheimer, Breaking Bad, Gladiator...",
+        "btn_direct_search": "🔍 ابحث في قواعد البيانات",
+        "direct_status_searching": "جاري البحث في قواعد البيانات المجانية (YTS, Wikipedia, EZTV)...",
+        "direct_results_count": "تم العثور على **{count}** نتيجة مطابقة:",
+        "direct_no_results": "لم يتم العثور على نتائج مطابقة لهذا العنوان. جرب كتابة اسم العمل بالإنجليزية.",
     },
 }
 
 # --- INITIALIZE SESSION STATE ---
 if "lang" not in st.session_state:
     st.session_state.lang = "en"
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = "collection"
 if "extracted_items" not in st.session_state:
     st.session_state.extracted_items = None
 if "extraction_stats" not in st.session_state:
     st.session_state.extraction_stats = None
 if "random_pick" not in st.session_state:
     st.session_state.random_pick = None
+if "direct_search_results" not in st.session_state:
+    st.session_state.direct_search_results = None
 
 # --- SIDEBAR CONFIGURATION ---
 st.sidebar.header("🌐 CineHarvest")
@@ -200,6 +232,16 @@ selected_lang_name = st.sidebar.selectbox(
 st.session_state.lang = "en" if selected_lang_name == "English" else "ar"
 t = TRANSLATIONS[st.session_state.lang]
 
+# Navigation Mode Selection
+st.sidebar.markdown("---")
+st.sidebar.subheader(t["nav_header"])
+mode_selection = st.sidebar.radio(
+    t["mode_label"],
+    options=[t["mode_collection"], t["mode_search"]],
+    index=0 if st.session_state.app_mode == "collection" else 1,
+)
+st.session_state.app_mode = "collection" if mode_selection == t["mode_collection"] else "search"
+
 # RTL/LTR Styling
 if st.session_state.lang == "ar":
     st.markdown(
@@ -209,7 +251,6 @@ if st.session_state.lang == "ar":
             direction: rtl;
             text-align: right;
         }
-        /* Keep URLs, code and numbers readable */
         code, pre, .stCodeBlock, input[type="text"] {
             direction: ltr !important;
             text-align: left !important;
@@ -244,28 +285,43 @@ with st.sidebar.expander(t["advanced_settings"]):
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     "🔗 **GitHub:** [google-collection-extractor](https://github.com/evile92/google-collection-extractor)\n\n"
-    "🚀 **Streamlit Cloud Ready**"
+    "🚀 **Live at:** [cineharvest.streamlit.app](https://cineharvest.streamlit.app)"
 )
 
 # --- APP HEADER ---
 st.title(t["app_title"])
 st.markdown(t["app_subtitle"])
 
-# --- MAIN INPUT SECTION ---
-col_input, col_btn = st.columns([4, 1])
-with col_input:
-    url_input = st.text_input(
-        t["url_label"],
-        value=DEFAULT_COLLECTION_URL,
-        placeholder=t["url_placeholder"],
-    )
-with col_btn:
-    st.write("")
-    st.write("")
-    start_btn = st.button(t["btn_extract"], type="primary", use_container_width=True)
+
+# Helper to get synopsis in the user's selected language
+def get_synopsis_text(item: Dict[str, Any], lang: str) -> Optional[str]:
+    if lang == "ar":
+        return item.get("synopsis_ar") or item.get("synopsis")
+    return item.get("synopsis") or item.get("synopsis_ar")
 
 
-# --- EXPORT HELPERS ---
+# Helper to render styled HTML badges for magnet/torrent buttons
+def render_download_badges(torrents: List[Dict[str, Any]], google_url: Optional[str] = None) -> str:
+    badges = []
+    if google_url:
+        badges.append(
+            f'<a href="{google_url}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#4b5563; color:white; border-radius:5px; text-decoration:none; font-size:12px;">🔗 Link</a>'
+        )
+    for tr in torrents[:3]:
+        q = tr.get("quality", "HD")
+        size = f" ({tr.get('size')})" if tr.get("size") else ""
+        if tr.get("magnet"):
+            badges.append(
+                f'<a href="{tr["magnet"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#8b5cf6; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">🧲 {q}{size}</a>'
+            )
+        elif tr.get("url"):
+            badges.append(
+                f'<a href="{tr["url"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#2563eb; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📥 Torrent {q}{size}</a>'
+            )
+    return "".join(badges)
+
+
+# Export Helpers
 def generate_txt(items: List[Dict[str, Any]]) -> str:
     return "\n".join(item.get("title", "").strip() for item in items if item.get("title"))
 
@@ -274,11 +330,11 @@ def generate_json(items: List[Dict[str, Any]]) -> str:
     return json.dumps(items, ensure_ascii=False, indent=2)
 
 
-def generate_csv(items: List[Dict[str, Any]]) -> str:
+def generate_csv(items: List[Dict[str, Any]], lang: str = "en") -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Title", "Type", "Year", "Rating", "Synopsis",
+        "Title", "Type", "Year", "Rating", "Synopsis", "Synopsis_AR",
         "TorrentURL_1080p", "MagnetLink_1080p", "TorrentURL_720p", "MagnetLink_720p",
         "GoogleURL", "PosterURL"
     ])
@@ -295,6 +351,7 @@ def generate_csv(items: List[Dict[str, Any]]) -> str:
             item.get("year") or "",
             item.get("rating") or "",
             item.get("synopsis") or "",
+            item.get("synopsis_ar") or "",
             t_1080.get("url") if t_1080 else "",
             t_1080.get("magnet") if t_1080 else "",
             t_720.get("url") if t_720 else "",
@@ -318,11 +375,11 @@ def generate_letterboxd_csv(items: List[Dict[str, Any]]) -> str:
     return output.getvalue()
 
 
-def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Google Watchlist") -> str:
+def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Google Watchlist", lang: str = "en") -> str:
     lines = [
         f"# {collection_title}",
         "",
-        f"> Extracted {len(items)} items using Google Collection Media Extractor.",
+        f"> Extracted {len(items)} items using CineHarvest Media Extractor.",
         "",
         "## Watchlist Checklist & Downloads",
         "",
@@ -337,7 +394,7 @@ def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Goog
         link_title = f"[{title}]({url})" if url else title
         lines.append(f"- [ ] **{link_title}**{year_str}{type_str}{rating_str}")
 
-        synopsis = item.get("synopsis")
+        synopsis = get_synopsis_text(item, lang)
         if synopsis:
             short_syn = synopsis[:280] + ("..." if len(synopsis) > 280 else "")
             lines.append(f"  > 📖 *{short_syn}*")
@@ -370,7 +427,7 @@ def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Goog
         url = item.get("url")
         actions = []
         if url:
-            actions.append(f"[Google]({url})")
+            actions.append(f"[Link]({url})")
         torrents = item.get("torrents", [])
         if torrents and torrents[0].get("magnet"):
             actions.append(f"[🧲 Magnet]({torrents[0]['magnet']})")
@@ -380,304 +437,409 @@ def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Goog
     return "\n".join(lines)
 
 
-# Helper to render styled HTML badges for magnet/torrent buttons
-def render_download_badges(torrents: List[Dict[str, Any]], google_url: Optional[str] = None) -> str:
-    badges = []
-    if google_url:
-        badges.append(
-            f'<a href="{google_url}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#4b5563; color:white; border-radius:5px; text-decoration:none; font-size:12px;">🔗 Google</a>'
+# ==============================================================================
+# MODE 1: GOOGLE COLLECTION EXTRACTOR
+# ==============================================================================
+if st.session_state.app_mode == "collection":
+    col_input, col_btn = st.columns([4, 1])
+    with col_input:
+        url_input = st.text_input(
+            t["url_label"],
+            value=DEFAULT_COLLECTION_URL,
+            placeholder=t["url_placeholder"],
         )
-    for tr in torrents[:3]:
-        q = tr.get("quality", "HD")
-        size = f" ({tr.get('size')})" if tr.get("size") else ""
-        if tr.get("magnet"):
-            badges.append(
-                f'<a href="{tr["magnet"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#8b5cf6; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">🧲 {q}{size}</a>'
-            )
-        elif tr.get("url"):
-            badges.append(
-                f'<a href="{tr["url"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#2563eb; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📥 Torrent {q}{size}</a>'
-            )
-    return "".join(badges)
+    with col_btn:
+        st.write("")
+        st.write("")
+        start_btn = st.button(t["btn_extract"], type="primary", use_container_width=True)
 
-
-# --- EXTRACTION PROCESS ---
-if start_btn:
-    if not url_input.strip():
-        st.error(t["invalid_url"])
-    else:
-        status_box = st.status(t["status_title"], expanded=True)
-        pw = browser = context = page = None
-        try:
-            status_box.write(t["status_launching"])
-            pw, browser, context, page = launch_browser(headless=True)
-
-            intercepted_items: List[Dict[str, Any]] = []
-            setup_network_interception(page, intercepted_items)
-
-            status_box.write(t["status_navigating"])
-            open_collection(page, url_input.strip())
-            time.sleep(2)
-
-            scroll_placeholder = status_box.empty()
-            discovered_counts = []
-
-            def on_progress(count: int):
-                discovered_counts.append(count)
-                scroll_placeholder.write(t["status_discovered"].format(count=count))
-
-            status_box.write(t["status_scrolling"])
-            scroll_until_complete(
-                page,
-                progress_callback=on_progress,
-                scroll_delay=scroll_delay,
-                max_scrolls=max_scrolls,
-                no_change_limit=NO_CHANGE_LIMIT,
-            )
-
-            status_box.write(t["status_extracting"])
-            unique_items, strategy_used = extract_collection_data(
-                page,
-                intercepted_items=intercepted_items,
-            )
-
-            if enrich_media and unique_items:
-                status_box.write(t["status_enriching"])
-                enrich_bar = status_box.progress(0.0)
-
-                def on_enrich(cur: int, tot: int):
-                    enrich_bar.progress(cur / tot, text=t["status_enrich_progress"].format(cur=cur, tot=tot))
-
-                unique_items = enrich_media_items(unique_items, progress_callback=on_enrich)
-                enrich_bar.empty()
-
-            if tmdb_api_key and tmdb_api_key.strip() and unique_items:
-                status_box.write(t["status_tmdb"])
-                unique_items = enrich_items_with_tmdb(unique_items, tmdb_api_key.strip())
-
-            total_discovered = discovered_counts[-1] if discovered_counts else len(unique_items)
-            duplicates_count = max(0, total_discovered - len(unique_items))
-
-            st.session_state.extracted_items = unique_items
-            st.session_state.extraction_stats = {
-                "total": total_discovered,
-                "duplicates": duplicates_count,
-                "unique": len(unique_items),
-                "strategy": strategy_used,
-            }
-            # Pick a default random recommendation when finished
-            if unique_items:
-                st.session_state.random_pick = random.choice(unique_items)
-
-            status_box.update(label=t["status_complete"], state="complete", expanded=False)
-
-        except ExtractionError as e:
-            status_box.update(label=t["status_error"], state="error", expanded=True)
-            st.error(f"Extraction Error: {e}")
-        except Exception as e:
-            status_box.update(label=t["status_error"], state="error", expanded=True)
-            st.error(f"An unexpected error occurred: {e}")
-        finally:
-            if browser:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-            if pw:
-                try:
-                    pw.stop()
-                except Exception:
-                    pass
-
-# --- DISPLAY RESULTS & RECOMMENDATIONS ---
-if st.session_state.extracted_items is not None:
-    items = st.session_state.extracted_items
-    stats = st.session_state.extraction_stats
-
-    st.markdown("---")
-
-    # Metrics Row
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric(t["metric_discovered"], stats["total"])
-    m2.metric(t["metric_duplicates"], stats["duplicates"])
-    m3.metric(t["metric_unique"], stats["unique"])
-    m4.metric(t["metric_strategy"], stats["strategy"])
-
-    # --- RANDOM WATCH SUGGESTION BOX ---
-    st.markdown("---")
-    with st.container():
-        st.subheader(t["random_box_title"])
-        st.caption(t["random_box_desc"])
-
-        col_rand_btn, _ = st.columns([2, 3])
-        with col_rand_btn:
-            if st.button(t["random_btn"], type="secondary", use_container_width=True):
-                st.session_state.random_pick = random.choice(items)
-
-        if st.session_state.random_pick:
-            rand_item = st.session_state.random_pick
-            with st.container(border=True):
-                col_poster, col_info = st.columns([1, 3])
-
-                with col_poster:
-                    if rand_item.get("poster_url"):
-                        st.image(rand_item["poster_url"], use_container_width=True)
-                    else:
-                        st.markdown(
-                            "<div style='background:#1f2937; height:240px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:40px;'>🎬</div>",
-                            unsafe_allow_html=True,
-                        )
-
-                with col_info:
-                    r_type = rand_item.get("type")
-                    type_badge = t.get(r_type, r_type.upper() if r_type else "")
-                    year_badge = f"({rand_item['year']})" if rand_item.get("year") else ""
-                    rating_badge = f"⭐ {rand_item['rating']}/10" if rand_item.get("rating") else ""
-
-                    st.markdown(f"### 🎯 {rand_item.get('title', '')} {year_badge}")
-                    st.markdown(f"`{type_badge}` &nbsp;&nbsp; **{rating_badge}**")
-
-                    if rand_item.get("synopsis"):
-                        st.info(f"📖 **{t['synopsis_label']}** {rand_item['synopsis']}")
-
-                    # Download and link buttons
-                    st.markdown(f"**{t['download_links']}**")
-                    torrents = rand_item.get("torrents", [])
-                    if torrents:
-                        badges_html = render_download_badges(torrents, rand_item.get("url"))
-                        st.markdown(badges_html, unsafe_allow_html=True)
-                    else:
-                        st.caption(t["no_downloads"])
-                        if rand_item.get("url"):
-                            st.link_button(t["view_on_google"], rand_item["url"])
-
-    # --- EXPORT & DOWNLOADS ROW ---
-    st.markdown("---")
-    st.subheader(t["export_header"])
-    d1, d2, d3, d4, d5 = st.columns(5)
-
-    with d1:
-        st.download_button(
-            label=t["btn_txt"],
-            data=generate_txt(items),
-            file_name="collection_titles.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    with d2:
-        st.download_button(
-            label=t["btn_json"],
-            data=generate_json(items),
-            file_name="collection_data.json",
-            mime="application/json",
-            use_container_width=True,
-        )
-    with d3:
-        st.download_button(
-            label=t["btn_csv"],
-            data=generate_csv(items).encode("utf-8-sig"),
-            file_name="collection_data.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    with d4:
-        st.download_button(
-            label=t["btn_letterboxd"],
-            data=generate_letterboxd_csv(items).encode("utf-8-sig"),
-            file_name="letterboxd_watchlist.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    with d5:
-        st.download_button(
-            label=t["btn_md"],
-            data=generate_markdown(items),
-            file_name="collection_watchlist.md",
-            mime="text/markdown",
-            use_container_width=True,
-        )
-
-    # --- RESULTS PREVIEW TABS ---
-    st.markdown("---")
-    st.subheader(t["preview_header"])
-
-    # Search & Filter controls
-    col_filter1, col_filter2 = st.columns([1, 2])
-    with col_filter1:
-        type_options = [t["all_types"], t["movie"], t["tv"]]
-        filter_val = st.selectbox(t["filter_type"], options=type_options, index=0)
-    with col_filter2:
-        search_query = st.text_input(t["search_box"], value="", placeholder="e.g. Inception, Breaking Bad...")
-
-    # Filter items
-    filtered_items = items
-    if filter_val == t["movie"]:
-        filtered_items = [x for x in filtered_items if x.get("type") == "movie"]
-    elif filter_val == t["tv"]:
-        filtered_items = [x for x in filtered_items if x.get("type") == "tv"]
-
-    if search_query.strip():
-        q = search_query.strip().lower()
-        filtered_items = [x for x in filtered_items if q in x.get("title", "").lower()]
-
-    tab_cards, tab_table, tab_md = st.tabs([t["tab_cards"], t["tab_table"], t["tab_md"]])
-
-    # 1. Cards View with Posters
-    with tab_cards:
-        if not filtered_items:
-            st.info("No matching items found.")
+    if start_btn:
+        if not url_input.strip():
+            st.error(t["invalid_url"])
         else:
-            # Display items in responsive 3-column cards
+            status_box = st.status(t["status_title"], expanded=True)
+            pw = browser = context = page = None
+            try:
+                status_box.write(t["status_launching"])
+                pw, browser, context, page = launch_browser(headless=True)
+
+                intercepted_items: List[Dict[str, Any]] = []
+                setup_network_interception(page, intercepted_items)
+
+                status_box.write(t["status_navigating"])
+                open_collection(page, url_input.strip())
+                time.sleep(2)
+
+                scroll_placeholder = status_box.empty()
+                discovered_counts = []
+
+                def on_progress(count: int):
+                    discovered_counts.append(count)
+                    scroll_placeholder.write(t["status_discovered"].format(count=count))
+
+                status_box.write(t["status_scrolling"])
+                scroll_until_complete(
+                    page,
+                    progress_callback=on_progress,
+                    scroll_delay=scroll_delay,
+                    max_scrolls=max_scrolls,
+                    no_change_limit=NO_CHANGE_LIMIT,
+                )
+
+                status_box.write(t["status_extracting"])
+                unique_items, strategy_used = extract_collection_data(
+                    page,
+                    intercepted_items=intercepted_items,
+                )
+
+                if enrich_media and unique_items:
+                    status_box.write(t["status_enriching"])
+                    enrich_bar = status_box.progress(0.0)
+
+                    def on_enrich(cur: int, tot: int):
+                        enrich_bar.progress(cur / tot, text=t["status_enrich_progress"].format(cur=cur, tot=tot))
+
+                    unique_items = enrich_media_items(unique_items, progress_callback=on_enrich)
+                    enrich_bar.empty()
+
+                if tmdb_api_key and tmdb_api_key.strip() and unique_items:
+                    status_box.write(t["status_tmdb"])
+                    unique_items = enrich_items_with_tmdb(unique_items, tmdb_api_key.strip())
+
+                total_discovered = discovered_counts[-1] if discovered_counts else len(unique_items)
+                duplicates_count = max(0, total_discovered - len(unique_items))
+
+                st.session_state.extracted_items = unique_items
+                st.session_state.extraction_stats = {
+                    "total": total_discovered,
+                    "duplicates": duplicates_count,
+                    "unique": len(unique_items),
+                    "strategy": strategy_used,
+                }
+                if unique_items:
+                    st.session_state.random_pick = random.choice(unique_items)
+
+                status_box.update(label=t["status_complete"], state="complete", expanded=False)
+
+            except ExtractionError as e:
+                status_box.update(label=t["status_error"], state="error", expanded=True)
+                st.error(f"Extraction Error: {e}")
+            except Exception as e:
+                status_box.update(label=t["status_error"], state="error", expanded=True)
+                st.error(f"An unexpected error occurred: {e}")
+            finally:
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                if pw:
+                    try:
+                        pw.stop()
+                    except Exception:
+                        pass
+
+    # Results view for collection
+    if st.session_state.extracted_items is not None:
+        items = st.session_state.extracted_items
+        stats = st.session_state.extraction_stats
+
+        st.markdown("---")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(t["metric_discovered"], stats["total"])
+        m2.metric(t["metric_duplicates"], stats["duplicates"])
+        m3.metric(t["metric_unique"], stats["unique"])
+        m4.metric(t["metric_strategy"], stats["strategy"])
+
+        # Random Recommendation
+        st.markdown("---")
+        with st.container():
+            st.subheader(t["random_box_title"])
+            st.caption(t["random_box_desc"])
+
+            col_rand_btn, _ = st.columns([2, 3])
+            with col_rand_btn:
+                if st.button(t["random_btn"], type="secondary", use_container_width=True):
+                    st.session_state.random_pick = random.choice(items)
+
+            if st.session_state.random_pick:
+                rand_item = st.session_state.random_pick
+                with st.container(border=True):
+                    col_poster, col_info = st.columns([1, 3])
+
+                    with col_poster:
+                        if rand_item.get("poster_url"):
+                            st.image(rand_item["poster_url"], use_container_width=True)
+                        else:
+                            st.markdown(
+                                "<div style='background:#1f2937; height:240px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:40px;'>🎬</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                    with col_info:
+                        r_type = rand_item.get("type")
+                        type_badge = t.get(r_type, r_type.upper() if r_type else "")
+                        year_badge = f"({rand_item['year']})" if rand_item.get("year") else ""
+                        rating_badge = f"⭐ {rand_item['rating']}/10" if rand_item.get("rating") else ""
+
+                        st.markdown(f"### 🎯 {rand_item.get('title', '')} {year_badge}")
+                        st.markdown(f"`{type_badge}` &nbsp;&nbsp; **{rating_badge}**")
+
+                        item_syn = get_synopsis_text(rand_item, st.session_state.lang)
+                        if item_syn:
+                            st.info(f"📖 **{t['synopsis_label']}** {item_syn}")
+
+                        st.markdown(f"**{t['download_links']}**")
+                        torrents = rand_item.get("torrents", [])
+                        if torrents:
+                            badges_html = render_download_badges(torrents, rand_item.get("url"))
+                            st.markdown(badges_html, unsafe_allow_html=True)
+                        else:
+                            st.caption(t["no_downloads"])
+                            if rand_item.get("url"):
+                                st.link_button(t["view_on_google"], rand_item["url"])
+
+        # Export & Downloads
+        st.markdown("---")
+        st.subheader(t["export_header"])
+        d1, d2, d3, d4, d5 = st.columns(5)
+
+        with d1:
+            st.download_button(
+                label=t["btn_txt"],
+                data=generate_txt(items),
+                file_name="collection_titles.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+        with d2:
+            st.download_button(
+                label=t["btn_json"],
+                data=generate_json(items),
+                file_name="collection_data.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with d3:
+            st.download_button(
+                label=t["btn_csv"],
+                data=generate_csv(items, st.session_state.lang).encode("utf-8-sig"),
+                file_name="collection_data.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with d4:
+            st.download_button(
+                label=t["btn_letterboxd"],
+                data=generate_letterboxd_csv(items).encode("utf-8-sig"),
+                file_name="letterboxd_watchlist.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with d5:
+            st.download_button(
+                label=t["btn_md"],
+                data=generate_markdown(items, lang=st.session_state.lang),
+                file_name="collection_watchlist.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+        # Previews
+        st.markdown("---")
+        st.subheader(t["preview_header"])
+
+        col_f1, col_f2 = st.columns([1, 2])
+        with col_f1:
+            type_opts = [t["all_types"], t["movie"], t["tv"]]
+            filter_val = st.selectbox(t["filter_type"], options=type_opts, index=0)
+        with col_f2:
+            search_query = st.text_input(t["search_box"], value="", placeholder="e.g. Inception, Breaking Bad...")
+
+        filtered_items = items
+        if filter_val == t["movie"]:
+            filtered_items = [x for x in filtered_items if x.get("type") == "movie"]
+        elif filter_val == t["tv"]:
+            filtered_items = [x for x in filtered_items if x.get("type") == "tv"]
+
+        if search_query.strip():
+            q = search_query.strip().lower()
+            filtered_items = [x for x in filtered_items if q in x.get("title", "").lower()]
+
+        tab_cards, tab_table, tab_md = st.tabs([t["tab_cards"], t["tab_table"], t["tab_md"]])
+
+        with tab_cards:
+            if not filtered_items:
+                st.info("No matching items found.")
+            else:
+                num_cols = 3
+                for i in range(0, len(filtered_items), num_cols):
+                    chunk = filtered_items[i : i + num_cols]
+                    cols = st.columns(num_cols)
+                    for col_idx, it in enumerate(chunk):
+                        with cols[col_idx]:
+                            with st.container(border=True):
+                                if it.get("poster_url"):
+                                    st.image(it["poster_url"], use_container_width=True)
+                                else:
+                                    st.markdown(
+                                        "<div style='background:#1f2937; height:200px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:36px;'>🎬</div>",
+                                        unsafe_allow_html=True,
+                                    )
+
+                                title_str = it.get("title", "")
+                                year_str = f" ({it['year']})" if it.get("year") else ""
+                                rating_str = f"⭐ {it['rating']}" if it.get("rating") else ""
+                                st.markdown(f"**{title_str}** {year_str}")
+
+                                c_type = it.get("type")
+                                badge_text = t.get(c_type, c_type.upper() if c_type else "")
+                                st.caption(f"`{badge_text}` {rating_str}")
+
+                                syn_text = get_synopsis_text(it, st.session_state.lang)
+                                if syn_text:
+                                    short_syn = syn_text[:120] + ("..." if len(syn_text) > 120 else "")
+                                    st.markdown(f"<small>{short_syn}</small>", unsafe_allow_html=True)
+
+                                it_torrents = it.get("torrents", [])
+                                badges_html = render_download_badges(it_torrents, it.get("url"))
+                                if badges_html:
+                                    st.markdown(badges_html, unsafe_allow_html=True)
+
+        with tab_table:
+            table_rows = []
+            for it in filtered_items:
+                it_torrents = it.get("torrents", [])
+                has_magnet = bool(it_torrents and it_torrents[0].get("magnet"))
+                syn_text = get_synopsis_text(it, st.session_state.lang)
+                table_rows.append({
+                    "Title": it.get("title", ""),
+                    "Type": it.get("type") or "-",
+                    "Year": it.get("year") or "-",
+                    "Rating": f"⭐ {it['rating']}" if it.get("rating") else "-",
+                    "Synopsis": (syn_text[:90] + "...") if syn_text else "-",
+                    "Downloads": f"🧲 {len(it_torrents)} links" if has_magnet else ("📥 Available" if it_torrents else "-"),
+                    "Link": it.get("url") or "-",
+                })
+            st.dataframe(table_rows, use_container_width=True)
+
+        with tab_md:
+            st.markdown(generate_markdown(filtered_items, lang=st.session_state.lang))
+
+
+# ==============================================================================
+# MODE 2: DIRECT MOVIE & SERIES DATABASE SEARCH
+# ==============================================================================
+elif st.session_state.app_mode == "search":
+    st.markdown("---")
+    st.subheader(t["direct_search_title"])
+    st.caption(t["direct_search_desc"])
+
+    col_s_input, col_s_btn = st.columns([4, 1])
+    with col_s_input:
+        direct_query = st.text_input(
+            t["direct_input_label"],
+            value="",
+            placeholder=t["direct_input_placeholder"],
+        )
+    with col_s_btn:
+        st.write("")
+        st.write("")
+        do_search = st.button(t["btn_direct_search"], type="primary", use_container_width=True)
+
+    if do_search and direct_query.strip():
+        with st.spinner(t["direct_status_searching"]):
+            search_res = search_media_database(direct_query.strip(), tmdb_key=tmdb_api_key)
+            st.session_state.direct_search_results = search_res
+
+    if st.session_state.direct_search_results is not None:
+        results = st.session_state.direct_search_results
+
+        if not results:
+            st.warning(t["direct_no_results"])
+        else:
+            st.markdown(t["direct_results_count"].format(count=len(results)))
+
+            # Export row for search results
+            st.subheader(t["export_header"])
+            sd1, sd2, sd3, sd4, sd5 = st.columns(5)
+            with sd1:
+                st.download_button(
+                    label=t["btn_txt"],
+                    data=generate_txt(results),
+                    file_name="search_results.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+            with sd2:
+                st.download_button(
+                    label=t["btn_json"],
+                    data=generate_json(results),
+                    file_name="search_results.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+            with sd3:
+                st.download_button(
+                    label=t["btn_csv"],
+                    data=generate_csv(results, st.session_state.lang).encode("utf-8-sig"),
+                    file_name="search_results.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            with sd4:
+                st.download_button(
+                    label=t["btn_letterboxd"],
+                    data=generate_letterboxd_csv(results).encode("utf-8-sig"),
+                    file_name="search_results_letterboxd.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            with sd5:
+                st.download_button(
+                    label=t["btn_md"],
+                    data=generate_markdown(results, collection_title="Search Results", lang=st.session_state.lang),
+                    file_name="search_results.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                )
+
+            # Display Search Results in 3-column cards
+            st.markdown("---")
             num_cols = 3
-            for i in range(0, len(filtered_items), num_cols):
-                chunk = filtered_items[i : i + num_cols]
+            for i in range(0, len(results), num_cols):
+                chunk = results[i : i + num_cols]
                 cols = st.columns(num_cols)
-                for col_idx, it in enumerate(chunk):
+                for col_idx, item in enumerate(chunk):
                     with cols[col_idx]:
                         with st.container(border=True):
-                            if it.get("poster_url"):
-                                st.image(it["poster_url"], use_container_width=True)
+                            if item.get("poster_url"):
+                                st.image(item["poster_url"], use_container_width=True)
                             else:
                                 st.markdown(
-                                    "<div style='background:#1f2937; height:200px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:36px;'>🎬</div>",
+                                    "<div style='background:#1f2937; height:220px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:40px;'>🎬</div>",
                                     unsafe_allow_html=True,
                                 )
 
-                            title_str = it.get("title", "")
-                            year_str = f" ({it['year']})" if it.get("year") else ""
-                            rating_str = f"⭐ {it['rating']}" if it.get("rating") else ""
-                            st.markdown(f"**{title_str}** {year_str}")
+                            title_str = item.get("title", "")
+                            year_str = f" ({item['year']})" if item.get("year") else ""
+                            rating_str = f"⭐ {item['rating']}" if item.get("rating") else ""
+                            st.markdown(f"### {title_str} {year_str}")
 
-                            c_type = it.get("type")
+                            c_type = item.get("type")
                             badge_text = t.get(c_type, c_type.upper() if c_type else "")
                             st.caption(f"`{badge_text}` {rating_str}")
 
-                            if it.get("synopsis"):
-                                short_syn = it["synopsis"][:120] + ("..." if len(it["synopsis"]) > 120 else "")
-                                st.markdown(f"<small>{short_syn}</small>", unsafe_allow_html=True)
+                            syn_text = get_synopsis_text(item, st.session_state.lang)
+                            if syn_text:
+                                st.markdown(f"<p style='font-size:13px; line-height:1.4;'>{syn_text}</p>", unsafe_allow_html=True)
 
-                            it_torrents = it.get("torrents", [])
-                            badges_html = render_download_badges(it_torrents, it.get("url"))
-                            if badges_html:
+                            it_torrents = item.get("torrents", [])
+                            if it_torrents:
+                                st.markdown(f"**{t['download_links']}**")
+                                badges_html = render_download_badges(it_torrents, item.get("url"))
                                 st.markdown(badges_html, unsafe_allow_html=True)
-
-    # 2. Table View
-    with tab_table:
-        table_rows = []
-        for it in filtered_items:
-            it_torrents = it.get("torrents", [])
-            has_magnet = bool(it_torrents and it_torrents[0].get("magnet"))
-            table_rows.append({
-                "Title": it.get("title", ""),
-                "Type": it.get("type") or "-",
-                "Year": it.get("year") or "-",
-                "Rating": f"⭐ {it['rating']}" if it.get("rating") else "-",
-                "Synopsis": (it.get("synopsis")[:90] + "...") if it.get("synopsis") else "-",
-                "Downloads": f"🧲 {len(it_torrents)} links" if has_magnet else ("📥 Available" if it_torrents else "-"),
-                "Google URL": it.get("url") or "-",
-            })
-        st.dataframe(table_rows, use_container_width=True)
-
-    # 3. Markdown Checklist View
-    with tab_md:
-        st.markdown(generate_markdown(filtered_items))
+                            else:
+                                st.caption(t["no_downloads"])
+                                if item.get("url"):
+                                    st.link_button(t["view_on_google"], item["url"])

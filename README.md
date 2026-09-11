@@ -12,6 +12,8 @@ A robust, production-grade Python tool and web application designed to automate 
 ## Features
 
 - **Live Web Application (Bilingual Arabic & English):** Access anywhere at [cineharvest.streamlit.app](https://cineharvest.streamlit.app) with full RTL/LTR language toggling.
+- **Direct Movie & Series Database Search:** Instant search by title across YTS, Wikipedia, and TMDB without needing a Google Collection URL.
+- **Bilingual Plot Synopses (Arabic & English):** Automatically fetches native Arabic synopses from Arabic Wikipedia when the app is set to Arabic, and English synopses when set to English.
 - **Random Watch Recommendation:** Shuffles the collection and suggests a movie or series to watch with full details and download links.
 - **Posters & Cards View:** Enriches every entry with official theatrical poster covers from YTS & Wikipedia REST API.
 - **Automatic Torrent & Magnet Links (YTS & EZTV):** Automatically fetches high-speed Magnet links and `.torrent` files (1080p, 720p, 4K) for all discovered movies without requiring any API key.

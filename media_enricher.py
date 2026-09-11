@@ -33,6 +33,7 @@ TRACKER_PARAM = "".join(f"&tr={urllib.parse.quote(tr)}" for tr in TRACKERS)
 YTS_API_URL = "https://movies-api.accel.li/api/v2/list_movies.json"
 EZTV_API_URL = "https://eztvx.to/api/get-torrents"
 WIKI_SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/summary"
+WIKI_AR_SUMMARY_URL = "https://ar.wikipedia.org/api/rest_v1/page/summary"
 HEADERS = {"User-Agent": "GoogleCollectionMediaExtractor/2.0 (OpenSource)"}
 
 # Number-to-word translation for query fallback
@@ -190,6 +191,59 @@ def fetch_wikipedia_summary(title: str, media_type: Optional[str] = None) -> Opt
     return summary
 
 
+def fetch_arabic_wikipedia_summary(title: str, media_type: Optional[str] = None) -> Optional[str]:
+    """Fetch native Arabic plot synopsis from Arabic Wikipedia."""
+    candidates = []
+    if media_type == "tv":
+        candidates.extend([f"{title} (TV series)", f"{title} (series)", title])
+    elif media_type == "movie":
+        candidates.extend([f"{title} (film)", f"{title} (movie)", title])
+    else:
+        candidates.extend([f"{title} (film)", f"{title} (TV series)", title])
+
+    # Method 1: Interlanguage link resolution via English Wikipedia API
+    for cand in candidates:
+        try:
+            enc = urllib.parse.quote(cand.replace(" ", "_"))
+            langlink_url = (
+                f"https://en.wikipedia.org/w/api.php?action=query&prop=langlinks&lllang=ar"
+                f"&titles={enc}&redirects=1&format=json"
+            )
+            req = urllib.request.Request(langlink_url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                pages = data.get("query", {}).get("pages", {})
+                for p_id, p_val in pages.items():
+                    ll = p_val.get("langlinks", [])
+                    if ll and len(ll) > 0 and ll[0].get("*"):
+                        ar_title = ll[0]["*"]
+                        sum_url = f"{WIKI_AR_SUMMARY_URL}/{urllib.parse.quote(ar_title.replace(' ', '_'))}"
+                        req_ar = urllib.request.Request(sum_url, headers=HEADERS)
+                        with urllib.request.urlopen(req_ar, timeout=4) as resp_ar:
+                            ar_data = json.loads(resp_ar.read().decode("utf-8"))
+                            extract = ar_data.get("extract")
+                            if extract and len(extract.strip()) > 15:
+                                return re.sub(r"\s+", " ", extract).strip()
+        except Exception:
+            continue
+
+    # Method 2: Direct lookup on Arabic Wikipedia
+    for cand in [title, f"{title} (فيلم)", f"{title} (مسلسل)"]:
+        try:
+            enc = urllib.parse.quote(cand.replace(" ", "_"))
+            sum_url = f"{WIKI_AR_SUMMARY_URL}/{enc}"
+            req = urllib.request.Request(sum_url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                ar_data = json.loads(resp.read().decode("utf-8"))
+                extract = ar_data.get("extract")
+                if extract and len(extract.strip()) > 15:
+                    return re.sub(r"\s+", " ", extract).strip()
+        except Exception:
+            continue
+
+    return None
+
+
 def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Enrich a single movie or series item with synopsis, year, and download links."""
     enriched = dict(item)
@@ -229,6 +283,12 @@ def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
         if not enriched.get("poster_url") and wiki_poster:
             enriched["poster_url"] = wiki_poster
 
+    # 4. Fetch native Arabic plot overview
+    if not enriched.get("synopsis_ar"):
+        ar_summary = fetch_arabic_wikipedia_summary(title, media_type=known_type or enriched.get("type"))
+        if ar_summary:
+            enriched["synopsis_ar"] = ar_summary
+
     return enriched
 
 
@@ -261,3 +321,119 @@ def enrich_media_items(
                 progress_callback(completed, total)
 
     return [item for item in enriched_list if item is not None]
+
+
+def search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Search for movies and TV series across YTS, Wikipedia, and TMDB.
+    
+    Returns structured media cards with torrents, magnet links, posters, and bilingual synopses.
+    """
+    clean_q = query.strip()
+    if not clean_q:
+        return []
+
+    results: List[Dict[str, Any]] = []
+    seen_titles = set()
+
+    # 1. Search YTS for Movies (returns multiple matches with magnets)
+    try:
+        yts_search_url = f"{YTS_API_URL}?query_term={urllib.parse.quote(clean_q)}&limit=12"
+        req = urllib.request.Request(yts_search_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            movies = data.get("data", {}).get("movies", [])
+            for m in movies:
+                m_title = m.get("title", "").strip()
+                if not m_title:
+                    continue
+                seen_titles.add(m_title.lower())
+
+                torrents_list = []
+                for t in m.get("torrents", []):
+                    q = t.get("quality", "")
+                    t_hash = t.get("hash", "")
+                    t_url = t.get("url", "")
+                    size = t.get("size", "")
+                    magnet = build_magnet_uri(t_hash, m_title, q) if t_hash else None
+                    torrents_list.append({
+                        "quality": q,
+                        "type": t.get("type", "WEB"),
+                        "size": size,
+                        "url": t_url,
+                        "magnet": magnet,
+                    })
+
+                summary = m.get("summary") or m.get("synopsis") or m.get("description_full") or ""
+                if summary:
+                    summary = summary.replace("\n", " ").strip()
+
+                results.append({
+                    "title": m_title,
+                    "type": "movie",
+                    "year": str(m.get("year", "")) if m.get("year") else None,
+                    "rating": m.get("rating"),
+                    "poster_url": m.get("large_cover_image") or m.get("medium_cover_image"),
+                    "synopsis": summary,
+                    "synopsis_ar": None,
+                    "torrents": torrents_list,
+                    "url": m.get("url"),
+                    "imdb_code": m.get("imdb_code"),
+                })
+    except Exception as e:
+        logger.debug("YTS search error: %s", e)
+
+    # 2. Search Wikipedia via OpenSearch (great for TV series and unlisted films)
+    try:
+        wiki_search_url = (
+            f"https://en.wikipedia.org/w/api.php?action=opensearch"
+            f"&search={urllib.parse.quote(clean_q)}&limit=6&namespace=0&format=json"
+        )
+        req = urllib.request.Request(wiki_search_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            wiki_titles = data[1] if len(data) > 1 else []
+            for wt in wiki_titles:
+                clean_wt = re.sub(r"\s*\([^)]*\)", "", wt).strip()
+                if clean_wt.lower() in seen_titles:
+                    continue
+                seen_titles.add(clean_wt.lower())
+
+                w_summary, w_poster = fetch_wikipedia_details(wt)
+                if w_summary or w_poster:
+                    media_type = "tv" if "series" in wt.lower() or "season" in wt.lower() else "movie"
+                    results.append({
+                        "title": clean_wt,
+                        "type": media_type,
+                        "year": None,
+                        "rating": None,
+                        "poster_url": w_poster,
+                        "synopsis": w_summary,
+                        "synopsis_ar": None,
+                        "torrents": [],
+                        "url": f"https://en.wikipedia.org/wiki/{urllib.parse.quote(wt.replace(' ', '_'))}",
+                        "imdb_code": None,
+                    })
+    except Exception as e:
+        logger.debug("Wikipedia search error: %s", e)
+
+    # 3. Concurrently enrich Arabic synopses for all results
+    def enrich_arabic(res: Dict[str, Any]):
+        try:
+            ar_sum = fetch_arabic_wikipedia_summary(res["title"], media_type=res.get("type"))
+            if ar_sum:
+                res["synopsis_ar"] = ar_sum
+        except Exception:
+            pass
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        list(executor.map(enrich_arabic, results))
+
+    # 4. TMDB Enrichment if key provided
+    if tmdb_key:
+        try:
+            from tmdb import enrich_items_with_tmdb
+            results = enrich_items_with_tmdb(results, tmdb_key)
+        except Exception as e:
+            logger.debug("TMDB search enrichment error: %s", e)
+
+    return results
