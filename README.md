@@ -1,11 +1,19 @@
-# Google Collection Media Extractor
+# Google Collection Media Extractor (CineHarvest)
 
-A robust, production-grade Python tool designed to automate the extraction of movie and TV series titles from public and private **Google Collections** (such as Google Search Watchlists). Powered by **Playwright**, it handles dynamic JavaScript rendering, automated infinite scrolling, wire-level network interception, data sanitization, and exports clean titles into **TXT, JSON, CSV, Letterboxd-ready CSV, and Markdown** formats.
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://cineharvest.streamlit.app)
+[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+> 🌐 **Live Web Application:** [https://cineharvest.streamlit.app](https://cineharvest.streamlit.app)
+
+A robust, production-grade Python tool and web application designed to automate the extraction of movie and TV series titles from public and private **Google Collections** (such as Google Search Watchlists). Powered by **Playwright**, it handles dynamic JavaScript rendering, automated infinite scrolling, wire-level network interception, data sanitization, and exports clean titles into **TXT, JSON, CSV, Letterboxd-ready CSV, and Markdown** formats.
 
 ---
 
 ## Features
 
+- **Live Web Application (Bilingual Arabic & English):** Access anywhere at [cineharvest.streamlit.app](https://cineharvest.streamlit.app) with full RTL/LTR language toggling.
+- **Random Watch Recommendation:** Shuffles the collection and suggests a movie or series to watch with full details and download links.
+- **Posters & Cards View:** Enriches every entry with official theatrical poster covers from YTS & Wikipedia REST API.
 - **Automatic Torrent & Magnet Links (YTS & EZTV):** Automatically fetches high-speed Magnet links and `.torrent` files (1080p, 720p, 4K) for all discovered movies without requiring any API key.
 - **Concise Plot Summaries (YTS & Wikipedia REST API):** Enriches each movie and series with an accurate 2-3 sentence synopsis/overview ready for Notion, Obsidian, and CSV datasets.
 - **Letterboxd & IMDb Ready Export:** Generates an official `letterboxd_watchlist.csv` with standard `Title, Year, URL` headers for instant 1-click import into [Letterboxd](https://letterboxd.com/import/).
@@ -47,9 +55,11 @@ A robust, production-grade Python tool designed to automate the extraction of mo
 
 ---
 
-## Running the Web Application (Streamlit)
+## Web Application (CineHarvest)
 
-You can run the interactive graphical web dashboard locally or deploy it to Streamlit Community Cloud:
+🌐 **Live Cloud Version:** [https://cineharvest.streamlit.app](https://cineharvest.streamlit.app)
+
+You can use the live web app directly in your browser without installing anything, or run it locally:
 
 ```bash
 streamlit run app.py
