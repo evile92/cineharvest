@@ -182,7 +182,7 @@ TRANSLATIONS = {
 
 # --- INITIALIZE SESSION STATE ---
 if "lang" not in st.session_state:
-    st.session_state.lang = "ar"
+    st.session_state.lang = "en"
 if "extracted_items" not in st.session_state:
     st.session_state.extracted_items = None
 if "extraction_stats" not in st.session_state:
@@ -194,10 +194,10 @@ if "random_pick" not in st.session_state:
 st.sidebar.header("🌐 CineHarvest")
 selected_lang_name = st.sidebar.selectbox(
     "Language / اللغة",
-    options=["العربية", "English"],
-    index=0 if st.session_state.lang == "ar" else 1,
+    options=["English", "العربية"],
+    index=0 if st.session_state.lang == "en" else 1,
 )
-st.session_state.lang = "ar" if selected_lang_name == "العربية" else "en"
+st.session_state.lang = "en" if selected_lang_name == "English" else "ar"
 t = TRANSLATIONS[st.session_state.lang]
 
 # RTL/LTR Styling
