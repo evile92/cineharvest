@@ -13,6 +13,10 @@ debug/
 venv/
 ENV/
 
+# Authentication and session tokens
+auth/
+*.session.json
+
 # IDE / Editor files
 .vscode/
 .idea/

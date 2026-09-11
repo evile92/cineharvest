@@ -2,7 +2,7 @@
 
 Automates the extraction of movie and series titles from Google Collections
 using Playwright Chromium with robust multi-strategy parsing, infinite scrolling,
-and UTF-8 file exports.
+and UTF-8 file exports (TXT, JSON, CSV, Letterboxd CSV, and Markdown).
 """
 
 import argparse
@@ -18,6 +18,10 @@ from config import (
     DEFAULT_COLLECTION_URL,
     OUTPUT_TXT_PATH,
     OUTPUT_JSON_PATH,
+    OUTPUT_CSV_PATH,
+    OUTPUT_LETTERBOXD_PATH,
+    OUTPUT_MD_PATH,
+    DEFAULT_SESSION_PATH,
     DEBUG_DIR,
     DEBUG_LOG_PATH,
     HEADLESS,
@@ -25,15 +29,24 @@ from config import (
     SCROLL_DELAY,
     NO_CHANGE_LIMIT,
 )
-from cleaner import clean_title, remove_duplicates_preserve_order
+from cleaner import (
+    clean_title,
+    remove_duplicates_preserve_order,
+    export_to_csv,
+    export_to_letterboxd_csv,
+    export_to_markdown,
+)
 from extractor import (
     launch_browser,
     open_collection,
     scroll_until_complete,
     extract_collection_data,
     save_debug_artifacts,
+    save_session,
+    setup_network_interception,
     ExtractionError,
 )
+from tmdb import enrich_items_with_tmdb
 
 # Set Windows console to UTF-8 to prevent any UnicodeEncodeError in terminal prints
 if sys.platform == "win32":
@@ -50,10 +63,8 @@ def setup_logger(debug_mode: bool) -> logging.Logger:
     logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     logger.handlers.clear()
 
-    # Formatter
     formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 
-    # File handler in debug mode
     if debug_mode:
         fh = logging.FileHandler(DEBUG_LOG_PATH, mode="w", encoding="utf-8")
         fh.setLevel(logging.DEBUG)
@@ -86,6 +97,9 @@ def print_summary(
     unique_count: int,
     txt_path: Path,
     json_path: Path,
+    csv_path: Path,
+    letterboxd_path: Path,
+    md_path: Path,
     strategy_used: str,
     debug_mode: bool,
 ) -> None:
@@ -95,10 +109,12 @@ def print_summary(
     print(f"Items discovered : {items_discovered}")
     print(f"Duplicates       : {duplicates_count}")
     print(f"Unique titles    : {unique_count}")
-    print("TXT:")
-    print(f"  {txt_path}")
-    print("JSON:")
-    print(f"  {json_path}")
+    print("Exported Files:")
+    print(f"  [TXT]        : {txt_path}")
+    print(f"  [JSON]       : {json_path}")
+    print(f"  [CSV]        : {csv_path}")
+    print(f"  [Letterboxd] : {letterboxd_path}")
+    print(f"  [Markdown]   : {md_path}")
     if debug_mode:
         print(f"Strategy used    : {strategy_used}")
         print(f"Debug artifacts  : {DEBUG_DIR}")
@@ -108,7 +124,7 @@ def print_summary(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Extract movie and series titles from Google Collections into clean TXT and JSON."
+        description="Extract movie and series titles from Google Collections into clean TXT, JSON, CSV, Letterboxd, and Markdown."
     )
     parser.add_argument(
         "--url",
@@ -125,6 +141,23 @@ def main() -> int:
         "--no-headless",
         action="store_true",
         help="Run Chromium with a visible graphical window (useful for manual login/solving CAPTCHA)",
+    )
+    parser.add_argument(
+        "--save-session",
+        action="store_true",
+        help="Save browser authentication session/cookies to auth/session.json for reuse",
+    )
+    parser.add_argument(
+        "--session",
+        type=str,
+        default=None,
+        help="Path to an existing session JSON file (defaults to auth/session.json if exists)",
+    )
+    parser.add_argument(
+        "--tmdb-key",
+        type=str,
+        default=None,
+        help="Optional TMDB API key to enrich extracted titles with release year, ratings, and posters",
     )
     parser.add_argument(
         "--max-scrolls",
@@ -150,12 +183,40 @@ def main() -> int:
         default=str(OUTPUT_JSON_PATH),
         help=f"Path for output JSON file (default: {OUTPUT_JSON_PATH})",
     )
+    parser.add_argument(
+        "--output-csv",
+        type=str,
+        default=str(OUTPUT_CSV_PATH),
+        help=f"Path for output CSV file (default: {OUTPUT_CSV_PATH})",
+    )
+    parser.add_argument(
+        "--output-letterboxd",
+        type=str,
+        default=str(OUTPUT_LETTERBOXD_PATH),
+        help=f"Path for output Letterboxd CSV import file (default: {OUTPUT_LETTERBOXD_PATH})",
+    )
+    parser.add_argument(
+        "--output-md",
+        type=str,
+        default=str(OUTPUT_MD_PATH),
+        help=f"Path for output Markdown checklist file (default: {OUTPUT_MD_PATH})",
+    )
 
     args = parser.parse_args()
 
     txt_file = Path(args.output_txt).resolve()
     json_file = Path(args.output_json).resolve()
+    csv_file = Path(args.output_csv).resolve()
+    letterboxd_file = Path(args.output_letterboxd).resolve()
+    md_file = Path(args.output_md).resolve()
     headless_mode = False if args.no_headless else HEADLESS
+
+    # Session file selection
+    session_file = None
+    if args.session:
+        session_file = args.session
+    elif DEFAULT_SESSION_PATH.exists():
+        session_file = str(DEFAULT_SESSION_PATH)
 
     logger = setup_logger(args.debug)
     log_messages: List[str] = []
@@ -172,7 +233,14 @@ def main() -> int:
 
     pw = browser = context = page = None
     try:
-        pw, browser, context, page = launch_browser(headless=headless_mode)
+        pw, browser, context, page = launch_browser(
+            headless=headless_mode,
+            session_path=session_file,
+        )
+
+        # Setup wire-level network interception to harvest items streaming from Google
+        intercepted_network_items: List[Dict[str, Any]] = []
+        setup_network_interception(page, intercepted_network_items)
 
         print("[+] Opening collection...")
         log_and_record(f"Opening URL: {args.url}")
@@ -206,18 +274,35 @@ def main() -> int:
         print("[+] Removing duplicates...")
         log_and_record("Executing multi-strategy data extraction")
 
-        unique_items, strategy_used = extract_collection_data(page)
+        unique_items, strategy_used = extract_collection_data(
+            page,
+            intercepted_items=intercepted_network_items,
+        )
         log_and_record(f"Strategy used: {strategy_used}, total items: {len(unique_items)}")
+
+        # Optional TMDB Enrichment
+        if args.tmdb_key:
+            print("[+] Enriching metadata via TMDB API...")
+            log_and_record("Enriching items with TMDB metadata")
+            unique_items = enrich_items_with_tmdb(unique_items, args.tmdb_key)
 
         # Metrics calculation
         total_discovered = discovered_counts[-1] if discovered_counts else len(unique_items)
         unique_count = len(unique_items)
         duplicates_count = max(0, total_discovered - unique_count)
 
-        print("[+] Saving results...")
-        log_and_record(f"Saving to {txt_file} and {json_file}")
+        print("[+] Saving results (TXT, JSON, CSV, Letterboxd, Markdown)...")
+        log_and_record("Writing export files")
         save_txt(unique_items, txt_file)
         save_json(unique_items, json_file)
+        export_to_csv(unique_items, csv_file)
+        export_to_letterboxd_csv(unique_items, letterboxd_file)
+        export_to_markdown(unique_items, md_file)
+
+        # Save session if requested
+        if args.save_session and context:
+            save_session(context, DEFAULT_SESSION_PATH)
+            print(f"[+] Session saved to {DEFAULT_SESSION_PATH}")
 
         # In debug mode, save screenshot and full page HTML
         if args.debug:
@@ -229,6 +314,9 @@ def main() -> int:
             unique_count=unique_count,
             txt_path=txt_file,
             json_path=json_file,
+            csv_path=csv_file,
+            letterboxd_path=letterboxd_file,
+            md_path=md_file,
             strategy_used=strategy_used,
             debug_mode=args.debug,
         )

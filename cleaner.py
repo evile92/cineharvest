@@ -147,3 +147,94 @@ def detect_media_type(text_or_metadata: Optional[str]) -> Optional[str]:
 
     # Return None when uncertain (zero guesswork rule)
     return None
+
+
+def export_to_csv(items: List[Dict[str, Any]], path: Any) -> None:
+    """Export items to standard CSV file format."""
+    import csv
+    from pathlib import Path
+    
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(target, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Title", "Type", "Year", "Rating", "URL", "PosterURL"])
+        for item in items:
+            writer.writerow([
+                item.get("title", ""),
+                item.get("type") or "",
+                item.get("year") or "",
+                item.get("rating") or "",
+                item.get("url") or "",
+                item.get("poster_url") or "",
+            ])
+
+
+def export_to_letterboxd_csv(items: List[Dict[str, Any]], path: Any) -> None:
+    """Export items to official Letterboxd watchlist import CSV format.
+    
+    Letterboxd standard headers: Title, Year, URL
+    """
+    import csv
+    from pathlib import Path
+    
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(target, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Title", "Year", "URL"])
+        for item in items:
+            writer.writerow([
+                item.get("title", ""),
+                item.get("year") or "",
+                item.get("url") or "",
+            ])
+
+
+def export_to_markdown(items: List[Dict[str, Any]], path: Any, collection_title: str = "Google Watchlist") -> None:
+    """Export items to a formatted Markdown checklist and table for Notion / Obsidian."""
+    from pathlib import Path
+    
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    
+    lines = [
+        f"# {collection_title}",
+        "",
+        f"> Extracted {len(items)} items using Google Collection Media Extractor.",
+        "",
+        "## Watchlist Checklist",
+        "",
+    ]
+    
+    for item in items:
+        title = item.get("title", "")
+        url = item.get("url")
+        year_str = f" ({item['year']})" if item.get("year") else ""
+        if url:
+            lines.append(f"- [ ] [{title}]({url}){year_str}")
+        else:
+            lines.append(f"- [ ] {title}{year_str}")
+            
+    lines.extend([
+        "",
+        "## Detailed Table",
+        "",
+        "| # | Title | Type | Year | Link |",
+        "|---|---|---|---|---|",
+    ])
+    
+    for idx, item in enumerate(items, 1):
+        title = item.get("title", "")
+        media_type = item.get("type") or "-"
+        year = item.get("year") or "-"
+        url = item.get("url")
+        link_md = f"[Google Search]({url})" if url else "-"
+        lines.append(f"| {idx} | **{title}** | `{media_type}` | {year} | {link_md} |")
+        
+    lines.append("")
+    with open(target, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+

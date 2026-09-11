@@ -10,10 +10,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
 DEBUG_DIR = PROJECT_ROOT / "debug"
+AUTH_DIR = PROJECT_ROOT / "auth"
 
 # Ensure runtime directories exist
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+AUTH_DIR.mkdir(parents=True, exist_ok=True)
 
 # Default URLs
 DEFAULT_COLLECTION_URL = (
@@ -23,6 +25,12 @@ DEFAULT_COLLECTION_URL = (
 # Output file paths
 OUTPUT_TXT_PATH = OUTPUT_DIR / "movies_and_series.txt"
 OUTPUT_JSON_PATH = OUTPUT_DIR / "movies_and_series.json"
+OUTPUT_CSV_PATH = OUTPUT_DIR / "movies_and_series.csv"
+OUTPUT_LETTERBOXD_PATH = OUTPUT_DIR / "letterboxd_watchlist.csv"
+OUTPUT_MD_PATH = OUTPUT_DIR / "movies_and_series.md"
+
+# Authentication / Session
+DEFAULT_SESSION_PATH = AUTH_DIR / "session.json"
 
 # Debug output file paths
 DEBUG_SCREENSHOT_PATH = DEBUG_DIR / "screenshot.png"

@@ -1,7 +1,0 @@
-[03:12:33] Launching browser
-[03:12:33] Opening URL: https://www.google.com/collections/s/list/invalid_collection_id_12345/nonexistent
-[03:12:37] Waiting for dynamic content to hydrate
-[03:12:39] Starting infinite scroll
-[03:12:55] Executing multi-strategy data extraction
-[03:12:55] ExtractionError: Could not extract any titles from this collection.
-The collection might be empty, or Google changed the layout structure.

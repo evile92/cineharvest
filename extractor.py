@@ -38,8 +38,11 @@ class ExtractionError(Exception):
     pass
 
 
-def launch_browser(headless: bool = True) -> Tuple[Playwright, Browser, BrowserContext, Page]:
-    """Launch Playwright Chromium instance with anti-detection options and system browser fallback."""
+def launch_browser(
+    headless: bool = True,
+    session_path: Optional[str] = None,
+) -> Tuple[Playwright, Browser, BrowserContext, Page]:
+    """Launch Playwright Chromium instance with anti-detection options and optional session restoration."""
     pw = sync_playwright().start()
     browser_args = [
         "--disable-blink-features=AutomationControlled",
@@ -80,15 +83,55 @@ def launch_browser(headless: bool = True) -> Tuple[Playwright, Browser, BrowserC
             "Please run: playwright install chromium"
         )
 
-    context = browser.new_context(
-        user_agent=USER_AGENT,
-        viewport=VIEWPORT,
-        locale=LOCALE,
-        ignore_https_errors=True,
-    )
+    context_kwargs: Dict[str, Any] = {
+        "user_agent": USER_AGENT,
+        "viewport": VIEWPORT,
+        "locale": LOCALE,
+        "ignore_https_errors": True,
+    }
+
+    if session_path and os.path.exists(session_path):
+        context_kwargs["storage_state"] = session_path
+        logger.info("Loaded browser session from %s", session_path)
+
+    context = browser.new_context(**context_kwargs)
     page = context.new_page()
     page.set_default_timeout(PAGE_TIMEOUT)
     return pw, browser, context, page
+
+
+def save_session(context: BrowserContext, target_path: Any) -> None:
+    """Save browser authentication state and cookies to a JSON file."""
+    from pathlib import Path
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    context.storage_state(path=str(target))
+    logger.info("Browser session saved to %s", target)
+
+
+def setup_network_interception(page: Page, intercepted_collector: List[Dict[str, Any]]) -> None:
+    """Listen to HTTP responses to harvest collection item data directly from the wire."""
+    import re
+    import urllib.parse
+
+    def handle_response(response):
+        try:
+            url = response.url
+            if "SaveUi" in url or "batchexecute" in url:
+                text = response.text()
+                # Find occurrences of google search urls with titles
+                matches = re.findall(r'"https://www\.google\.com/search\?q=([^"&]+)[^"]*"', text)
+                for q in matches:
+                    title = urllib.parse.unquote_plus(q)
+                    intercepted_collector.append({
+                        "title": title,
+                        "url": f"https://www.google.com/search?q={q}",
+                        "meta": None,
+                    })
+        except Exception:
+            pass
+
+    page.on("response", handle_response)
 
 
 def open_collection(page: Page, url: str) -> None:
@@ -296,7 +339,10 @@ def _strategy_4_script_state(page: Page) -> List[Dict[str, Any]]:
     return raw_data
 
 
-def extract_collection_data(page: Page) -> Tuple[List[Dict[str, Any]], str]:
+def extract_collection_data(
+    page: Page,
+    intercepted_items: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List[Dict[str, Any]], str]:
     """Execute multi-strategy title extraction with fallback hierarchy.
     
     Returns the cleaned, deduplicated items and the name of the successful strategy.
@@ -307,6 +353,9 @@ def extract_collection_data(page: Page) -> Tuple[List[Dict[str, Any]], str]:
         ("Card Containers (.C4h8Ec / Qm9wMc)", _strategy_3_card_containers),
         ("Inline Script State (AF_initDataCallback)", _strategy_4_script_state),
     ]
+
+    if intercepted_items:
+        strategies.append(("Network Interception Stream", lambda p: intercepted_items))
 
     for strat_name, strat_func in strategies:
         try:
