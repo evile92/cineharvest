@@ -13,7 +13,7 @@ import logging
 import re
 import urllib.parse
 import urllib.request
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 
 logger = logging.getLogger("google_collection_extractor")
 
@@ -151,8 +151,8 @@ def fetch_eztv_torrents(imdb_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def fetch_wikipedia_summary(title: str, media_type: Optional[str] = None) -> Optional[str]:
-    """Fetch a concise 2-3 sentence overview from Wikipedia's free REST API."""
+def fetch_wikipedia_details(title: str, media_type: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """Fetch a concise overview and poster/thumbnail image from Wikipedia's free REST API."""
     candidates = [title]
     if media_type == "tv":
         candidates.extend([f"{title} (TV series)", f"{title} (series)"])
@@ -169,13 +169,25 @@ def fetch_wikipedia_summary(title: str, media_type: Optional[str] = None) -> Opt
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 extract = data.get("extract")
+                image_url = (
+                    data.get("thumbnail", {}).get("source")
+                    or data.get("originalimage", {}).get("source")
+                )
+                cleaned = None
                 if extract and len(extract.strip()) > 20:
                     cleaned = re.sub(r"\s+", " ", extract).strip()
-                    return cleaned
+                if cleaned or image_url:
+                    return cleaned, image_url
         except Exception:
             continue
 
-    return None
+    return None, None
+
+
+def fetch_wikipedia_summary(title: str, media_type: Optional[str] = None) -> Optional[str]:
+    """Fetch a concise 2-3 sentence overview from Wikipedia's free REST API."""
+    summary, _ = fetch_wikipedia_details(title, media_type)
+    return summary
 
 
 def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -209,11 +221,13 @@ def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
         if eztv_torrents:
             enriched["torrents"] = eztv_torrents
 
-    # 3. If no synopsis yet, query Wikipedia (ideal for TV series or unindexed films)
-    if not enriched.get("synopsis"):
-        wiki_summary = fetch_wikipedia_summary(title, media_type=known_type or enriched.get("type"))
-        if wiki_summary:
+    # 3. If no synopsis yet or no poster, query Wikipedia (ideal for TV series or unindexed films)
+    if not enriched.get("synopsis") or not enriched.get("poster_url"):
+        wiki_summary, wiki_poster = fetch_wikipedia_details(title, media_type=known_type or enriched.get("type"))
+        if not enriched.get("synopsis") and wiki_summary:
             enriched["synopsis"] = wiki_summary
+        if not enriched.get("poster_url") and wiki_poster:
+            enriched["poster_url"] = wiki_poster
 
     return enriched
 
