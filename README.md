@@ -6,14 +6,14 @@ A robust, production-grade Python tool designed to automate the extraction of mo
 
 ## Features
 
+- **Automatic Torrent & Magnet Links (YTS & EZTV):** Automatically fetches high-speed Magnet links and `.torrent` files (1080p, 720p, 4K) for all discovered movies without requiring any API key.
+- **Concise Plot Summaries (YTS & Wikipedia REST API):** Enriches each movie and series with an accurate 2-3 sentence synopsis/overview ready for Notion, Obsidian, and CSV datasets.
+- **Letterboxd & IMDb Ready Export:** Generates an official `letterboxd_watchlist.csv` with standard `Title, Year, URL` headers for instant 1-click import into [Letterboxd](https://letterboxd.com/import/).
+- **Markdown Checklist & Download Dashboard:** Exports an interactive Markdown document (`movies_and_series.md`) with task checkboxes, plot synopses, and instant `[🧲 Magnet]` download buttons.
 - **Smart Infinite Scroll & Network Interception:** Dynamically monitors item count plateaus and intercepts HTTP stream packets directly from Google's backend, ensuring lightning-fast data capture without missing items.
 - **Multi-Strategy Extraction Engine:** Employs a tiered extraction hierarchy (DOM title spans `jsname="r4nke"`, search anchor attributes, card containers, and embedded page state) ensuring resilience against UI layout changes.
-- **Letterboxd & IMDb Ready Export:** Generates an official `letterboxd_watchlist.csv` with standard `Title, Year, URL` headers for instant 1-click import into [Letterboxd](https://letterboxd.com/import/).
-- **Markdown Checklist & Table:** Exports a formatted Markdown document (`movies_and_series.md`) with interactive task checkboxes and detailed summary tables, ready for **Notion**, **Obsidian**, or GitHub.
 - **Session & Cookie Persistence:** Save authenticated browser sessions via `--save-session` to scrape private watchlists repeatedly without needing to log in every time.
-- **Optional TMDB API Enrichment:** Pass `--tmdb-key` to automatically query The Movie Database (TMDB) and enrich your collection with release years, vote ratings, and high-res poster URLs.
 - **Accurate Data Sanitization:** Strips away Google UI buttons (*Save to collection*, *More options*, *Share*, *Remove*) and HTML entities (`&amp;`, `&#39;`) while preserving authentic numbers in titles (e.g., *12 Monkeys*, *28 Days Later*, *1923*).
-- **Order-Preserving Deduplication:** Eliminates duplicate entries while strictly preserving the original chronological appearance in the collection.
 - **Universal UTF-8 Encoding:** Flawless support for international characters, Arabic, accents, and diverse Unicode sets.
 - **Browser Fallback Mechanism:** Automatically utilizes Playwright's Chromium, with fallback to locally installed Google Chrome or Microsoft Edge.
 - **Comprehensive Debug Mode (`--debug`):** Captures full-page screenshots (`debug/screenshot.png`), complete DOM HTML snapshots (`debug/page.html`), and execution timestamps in `debug/extraction.log`.

@@ -155,13 +155,20 @@ def open_collection(page: Page, url: str) -> None:
     # Wait for initial hydration
     time.sleep(2)
 
-    # Check for CAPTCHA or Login requirements
+    # Check for CAPTCHA or Login requirements or Expired Share Links
     current_url = page.url
+    if "save?error=1" in current_url or "interests/saved?error=1" in current_url:
+        raise ExtractionError(
+            "Google returned an error for this collection link (redirected to /save?error=1).\n"
+            "The share link may have expired, or its sharing permissions were updated in Google Collections.\n"
+            "Solution: In your Google Collection, click 'Share' -> choose 'Anyone with link' -> copy a fresh link."
+        )
+
     if "accounts.google.com" in current_url:
         raise ExtractionError(
             "Google is requesting account sign-in to view this collection.\n"
-            "If this is a private collection, please run the tool with --no-headless\n"
-            "to log in manually in the browser window, then the extractor will continue."
+            "If this is a private collection, run: python main.py --no-headless --save-session\n"
+            "to log in once in the browser window, then the extractor will continue automatically."
         )
     if "sorry/index" in current_url:
         raise ExtractionError(

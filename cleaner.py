@@ -150,7 +150,7 @@ def detect_media_type(text_or_metadata: Optional[str]) -> Optional[str]:
 
 
 def export_to_csv(items: List[Dict[str, Any]], path: Any) -> None:
-    """Export items to standard CSV file format."""
+    """Export items to standard CSV file format including synopsis and download links."""
     import csv
     from pathlib import Path
     
@@ -159,13 +159,28 @@ def export_to_csv(items: List[Dict[str, Any]], path: Any) -> None:
     
     with open(target, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        writer.writerow(["Title", "Type", "Year", "Rating", "URL", "PosterURL"])
+        writer.writerow([
+            "Title", "Type", "Year", "Rating", "Synopsis", 
+            "TorrentURL_1080p", "MagnetLink_1080p", "TorrentURL_720p", "MagnetLink_720p",
+            "GoogleURL", "PosterURL"
+        ])
         for item in items:
+            torrents = item.get("torrents", [])
+            t_1080 = next((t for t in torrents if t.get("quality") == "1080p"), None)
+            t_720 = next((t for t in torrents if t.get("quality") == "720p"), None)
+            if not t_1080 and torrents:
+                t_1080 = torrents[0]
+
             writer.writerow([
                 item.get("title", ""),
                 item.get("type") or "",
                 item.get("year") or "",
                 item.get("rating") or "",
+                item.get("synopsis") or "",
+                t_1080.get("url") if t_1080 else "",
+                t_1080.get("magnet") if t_1080 else "",
+                t_720.get("url") if t_720 else "",
+                t_720.get("magnet") if t_720 else "",
                 item.get("url") or "",
                 item.get("poster_url") or "",
             ])
@@ -194,7 +209,7 @@ def export_to_letterboxd_csv(items: List[Dict[str, Any]], path: Any) -> None:
 
 
 def export_to_markdown(items: List[Dict[str, Any]], path: Any, collection_title: str = "Google Watchlist") -> None:
-    """Export items to a formatted Markdown checklist and table for Notion / Obsidian."""
+    """Export items to a formatted Markdown checklist with synopsis and download buttons."""
     from pathlib import Path
     
     target = Path(path)
@@ -205,7 +220,7 @@ def export_to_markdown(items: List[Dict[str, Any]], path: Any, collection_title:
         "",
         f"> Extracted {len(items)} items using Google Collection Media Extractor.",
         "",
-        "## Watchlist Checklist",
+        "## Watchlist Checklist & Downloads",
         "",
     ]
     
@@ -213,28 +228,61 @@ def export_to_markdown(items: List[Dict[str, Any]], path: Any, collection_title:
         title = item.get("title", "")
         url = item.get("url")
         year_str = f" ({item['year']})" if item.get("year") else ""
-        if url:
-            lines.append(f"- [ ] [{title}]({url}){year_str}")
-        else:
-            lines.append(f"- [ ] {title}{year_str}")
+        rating_str = f" ⭐ {item['rating']}/10" if item.get("rating") else ""
+        type_str = f" `[{item['type']}]`" if item.get("type") else ""
+        
+        link_title = f"[{title}]({url})" if url else title
+        lines.append(f"- [ ] **{link_title}**{year_str}{type_str}{rating_str}")
+        
+        # Add Synopsis if available
+        synopsis = item.get("synopsis")
+        if synopsis:
+            # Format clean blockquote
+            short_syn = synopsis[:280] + ("..." if len(synopsis) > 280 else "")
+            lines.append(f"  > 📖 *{short_syn}*")
+            
+        # Add Download Links if available
+        torrents = item.get("torrents", [])
+        if torrents:
+            download_links = []
+            for t in torrents[:3]:  # Top 3 qualities
+                q = t.get("quality", "HD")
+                size = f" ({t.get('size')})" if t.get("size") else ""
+                if t.get("magnet"):
+                    download_links.append(f"[🧲 Magnet {q}{size}]({t['magnet']})")
+                elif t.get("url"):
+                    download_links.append(f"[📥 Torrent {q}{size}]({t['url']})")
+            if download_links:
+                lines.append(f"  > 💾 **Downloads:** {' | '.join(download_links)}")
+                
+        lines.append("")  # Spacing
             
     lines.extend([
-        "",
         "## Detailed Table",
         "",
-        "| # | Title | Type | Year | Link |",
-        "|---|---|---|---|---|",
+        "| # | Title | Type | Year | Rating | Links |",
+        "|---|---|---|---|---|---|",
     ])
     
     for idx, item in enumerate(items, 1):
         title = item.get("title", "")
         media_type = item.get("type") or "-"
         year = item.get("year") or "-"
+        rating = f"⭐ {item['rating']}" if item.get("rating") else "-"
         url = item.get("url")
-        link_md = f"[Google Search]({url})" if url else "-"
-        lines.append(f"| {idx} | **{title}** | `{media_type}` | {year} | {link_md} |")
+        
+        actions = []
+        if url:
+            actions.append(f"[Google]({url})")
+        torrents = item.get("torrents", [])
+        if torrents and torrents[0].get("magnet"):
+            actions.append(f"[🧲 Magnet]({torrents[0]['magnet']})")
+            
+        actions_str = " \\| ".join(actions) if actions else "-"
+        lines.append(f"| {idx} | **{title}** | `{media_type}` | {year} | {rating} | {actions_str} |")
         
     lines.append("")
     with open(target, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
 

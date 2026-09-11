@@ -47,6 +47,7 @@ from extractor import (
     ExtractionError,
 )
 from tmdb import enrich_items_with_tmdb
+from media_enricher import enrich_media_items
 
 # Set Windows console to UTF-8 to prevent any UnicodeEncodeError in terminal prints
 if sys.platform == "win32":
@@ -158,6 +159,11 @@ def main() -> int:
         type=str,
         default=None,
         help="Optional TMDB API key to enrich extracted titles with release year, ratings, and posters",
+    )
+    parser.add_argument(
+        "--no-enrich",
+        action="store_true",
+        help="Skip fetching download links (YTS / EZTV) and plot summaries (Wikipedia)",
     )
     parser.add_argument(
         "--max-scrolls",
@@ -279,6 +285,12 @@ def main() -> int:
             intercepted_items=intercepted_network_items,
         )
         log_and_record(f"Strategy used: {strategy_used}, total items: {len(unique_items)}")
+
+        # Automatic Media Enrichment (YTS Torrents, Magnets & Wikipedia Synopsis)
+        if not args.no_enrich:
+            print("[+] Fetching download links (YTS / EZTV) & synopses...")
+            log_and_record("Fetching YTS/EZTV downloads and Wikipedia synopsis")
+            unique_items = enrich_media_items(unique_items)
 
         # Optional TMDB Enrichment
         if args.tmdb_key:
