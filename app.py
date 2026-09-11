@@ -242,21 +242,132 @@ mode_selection = st.sidebar.radio(
 )
 st.session_state.app_mode = "collection" if mode_selection == t["mode_collection"] else "search"
 
-# RTL/LTR Styling
+# RTL/LTR Dynamic Responsive Styling
 if st.session_state.lang == "ar":
     st.markdown(
         """
         <style>
-        .main, .stApp {
-            direction: rtl;
-            text-align: right;
+        /* Global Root & Containers */
+        html, body, [data-testid="stAppViewContainer"], .main, .stApp {
+            direction: rtl !important;
+            text-align: right !important;
         }
-        code, pre, .stCodeBlock, input[type="text"] {
+
+        /* Sidebar RTL */
+        [data-testid="stSidebar"],
+        [data-testid="stSidebar"] div,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] label {
+            direction: rtl !important;
+            text-align: right !important;
+        }
+
+        /* Headings & Text */
+        h1, h2, h3, h4, h5, h6,
+        [data-testid="stMarkdownContainer"],
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] span,
+        [data-testid="stMarkdownContainer"] li,
+        [data-testid="stCaptionContainer"],
+        [data-testid="stCaptionContainer"] p {
+            direction: rtl !important;
+            text-align: right !important;
+        }
+
+        /* Form Controls & Labels */
+        label,
+        [data-testid="stWidgetLabel"],
+        [data-testid="stWidgetLabel"] *,
+        [data-testid="stRadio"] label,
+        [data-testid="stCheckbox"] label {
+            direction: rtl !important;
+            text-align: right !important;
+        }
+
+        /* Metrics & Status Cards */
+        [data-testid="stMetric"],
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetricValue"],
+        [data-testid="stMetric"] * {
+            text-align: right !important;
+            direction: rtl !important;
+            justify-content: flex-end !important;
+        }
+
+        /* Alerts & Info callouts */
+        [data-testid="stAlert"],
+        [data-testid="stAlert"] * {
+            direction: rtl !important;
+            text-align: right !important;
+        }
+
+        /* Tabs list alignment */
+        [data-baseweb="tab-list"] {
+            direction: rtl !important;
+        }
+
+        /* Keep code, URLs, and inputs LTR */
+        input[type="text"],
+        input[type="password"],
+        code,
+        pre,
+        .stCodeBlock {
             direction: ltr !important;
             text-align: left !important;
         }
-        div[data-testid="stMetricValue"] {
-            text-align: right !important;
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        """
+        <style>
+        /* Global Root & Containers LTR */
+        html, body, [data-testid="stAppViewContainer"], .main, .stApp {
+            direction: ltr !important;
+            text-align: left !important;
+        }
+
+        /* Sidebar LTR */
+        [data-testid="stSidebar"],
+        [data-testid="stSidebar"] div,
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] label {
+            direction: ltr !important;
+            text-align: left !important;
+        }
+
+        /* Headings & Text LTR */
+        h1, h2, h3, h4, h5, h6,
+        [data-testid="stMarkdownContainer"],
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] span,
+        [data-testid="stMarkdownContainer"] li,
+        [data-testid="stCaptionContainer"],
+        [data-testid="stCaptionContainer"] p {
+            direction: ltr !important;
+            text-align: left !important;
+        }
+
+        /* Form Controls & Labels LTR */
+        label,
+        [data-testid="stWidgetLabel"],
+        [data-testid="stWidgetLabel"] * {
+            direction: ltr !important;
+            text-align: left !important;
+        }
+
+        /* Metrics LTR */
+        [data-testid="stMetric"],
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetricValue"],
+        [data-testid="stMetric"] * {
+            text-align: left !important;
+            direction: ltr !important;
+            justify-content: flex-start !important;
         }
         </style>
         """,
