@@ -56,6 +56,7 @@ from extractor import (
     open_collection,
     scroll_until_complete,
     extract_collection_data,
+    extract_all_collection_pages,
     setup_network_interception,
     ExtractionError,
 )
@@ -90,7 +91,9 @@ TRANSLATIONS = {
         "status_launching": "🌐 Launching headless Chromium browser...",
         "status_navigating": "🔗 Navigating to collection URL...",
         "status_scrolling": "📜 Scrolling page to load all items...",
-        "status_discovered": "📜 Discovered **{count}** items so far...",
+        "status_discovered": "📜 Discovered **{count}** items on this page...",
+        "status_page_progress": "📄 Processing page **{page}**... ({count} items accumulated so far)",
+        "status_moving_next_page": "➡️ Multi-page collection detected: Moving to page {next_page}...",
         "status_extracting": "🔍 Extracting titles, sanitizing, and deduplicating...",
         "status_enriching": "🎬 Fetching download links, synopses, and posters...",
         "status_enrich_progress": "Enriching: {cur}/{tot} items",
@@ -163,9 +166,11 @@ TRANSLATIONS = {
         "status_title": "جاري استخراج بيانات المجموعة...",
         "status_launching": "🌐 تشغيل متصفح Chromium في الخلفية...",
         "status_navigating": "🔗 فتح رابط المجموعة...",
-        "status_scrolling": "📜 تمرير الصفحة لتحميل كافة العناصر...",
-        "status_discovered": "📜 تم اكتشاف **{count}** عنصراً حتى الآن...",
-        "status_extracting": "🔍 استخراج العناوين، تنظيف البيانات، وإزالة التكرار...",
+        "status_scrolling": "📜 جاري التمرير الذكي لجلب كافة عناصر الصفحة...",
+        "status_discovered": "📜 تم اكتشاف **{count}** عنصراً في هذه الصفحة...",
+        "status_page_progress": "📄 معالجة الصفحة **{page}**... (تم جمع {count} عنصراً حتى الآن)",
+        "status_moving_next_page": "➡️ تم اكتشاف قائمة متعددة الصفحات: الانتقال للصفحة {next_page}...",
+        "status_extracting": "🔍 استخراج العناوين والتحقق منها وحذف التكرارات...",
         "status_enriching": "🎬 جلب روابط التحميل والنبذة التعريفية وصور البوسترات...",
         "status_enrich_progress": "جاري الإثراء: {cur}/{tot} عنصراً",
         "status_tmdb": "✨ الإثراء ببيانات TMDB...",
@@ -538,26 +543,26 @@ if st.session_state.app_mode == "collection":
                 open_collection(page, url_input.strip())
                 time.sleep(2)
 
+                page_placeholder = status_box.empty()
                 scroll_placeholder = status_box.empty()
                 discovered_counts = []
+
+                def on_page_progress(page_num: int, count_so_far: int):
+                    page_placeholder.write(t["status_page_progress"].format(page=page_num, count=count_so_far))
 
                 def on_progress(count: int):
                     discovered_counts.append(count)
                     scroll_placeholder.write(t["status_discovered"].format(count=count))
 
                 status_box.write(t["status_scrolling"])
-                scroll_until_complete(
+                unique_items, strategy_used, total_pages = extract_all_collection_pages(
                     page,
-                    progress_callback=on_progress,
+                    intercepted_items=intercepted_items,
+                    page_callback=on_page_progress,
+                    scroll_callback=on_progress,
                     scroll_delay=scroll_delay,
                     max_scrolls=max_scrolls,
                     no_change_limit=NO_CHANGE_LIMIT,
-                )
-
-                status_box.write(t["status_extracting"])
-                unique_items, strategy_used = extract_collection_data(
-                    page,
-                    intercepted_items=intercepted_items,
                 )
 
                 if enrich_media and unique_items:
@@ -574,15 +579,18 @@ if st.session_state.app_mode == "collection":
                     status_box.write(t["status_tmdb"])
                     unique_items = enrich_items_with_tmdb(unique_items, tmdb_api_key.strip())
 
-                total_discovered = discovered_counts[-1] if discovered_counts else len(unique_items)
+                total_discovered = max(len(unique_items), discovered_counts[-1] if discovered_counts else len(unique_items))
                 duplicates_count = max(0, total_discovered - len(unique_items))
+
+                strategy_display = f"{strategy_used} ({total_pages} pages)" if total_pages > 1 else strategy_used
 
                 st.session_state.extracted_items = unique_items
                 st.session_state.extraction_stats = {
                     "total": total_discovered,
                     "duplicates": duplicates_count,
                     "unique": len(unique_items),
-                    "strategy": strategy_used,
+                    "strategy": strategy_display,
+                    "pages": total_pages,
                 }
                 if unique_items:
                     st.session_state.random_pick = random.choice(unique_items)

@@ -397,6 +397,213 @@ def extract_collection_data(
     )
 
 
+def get_pagination_info(page: Page) -> Dict[str, Any]:
+    """Inspect current pagination state and check if a Next page button exists.
+    
+    Detects Google Collections pagination footers such as '< 1-200 of 234 >'
+    and assesses whether more items remain on subsequent pages.
+    """
+    try:
+        info = page.evaluate("""() => {
+            // Strategy 1: Find text matching '1-200 of 234' or '1-200 من 234'
+            const regex = /\\b(\\d+)[\\s–-]+(\\d+)\\s+(?:of|من|de|sur|\\/)\\s+(\\d+)\\b/i;
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let node;
+            while (node = walker.nextNode()) {
+                const text = node.textContent.trim();
+                const match = regex.exec(text);
+                if (match) {
+                    const start = parseInt(match[1], 10);
+                    const end = parseInt(match[2], 10);
+                    const total = parseInt(match[3], 10);
+                    
+                    const container = node.parentElement ? (node.parentElement.closest('div, nav, footer') || node.parentElement) : null;
+                    if (container) {
+                        const buttons = Array.from(container.querySelectorAll('button, div[role="button"], span[role="button"], a'));
+                        let nextBtn = buttons.find(b => {
+                            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                            return aria.includes('next') || aria.includes('تالي') || aria.includes('chevron_right');
+                        });
+                        if (!nextBtn && buttons.length >= 2) {
+                            const afterButtons = buttons.filter(b => (node.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+                            nextBtn = afterButtons.length > 0 ? afterButtons[0] : buttons[buttons.length - 1];
+                        }
+                        
+                        const isNextDisabled = nextBtn ? (
+                            nextBtn.disabled === true ||
+                            nextBtn.getAttribute('aria-disabled') === 'true' ||
+                            nextBtn.classList.contains('disabled') ||
+                            nextBtn.hasAttribute('disabled')
+                        ) : (end >= total);
+                        
+                        return {
+                            has_pagination: true,
+                            current_text: match[0],
+                            start: start,
+                            end: end,
+                            total: total,
+                            has_next: !isNextDisabled && end < total,
+                            is_last_page: isNextDisabled || end >= total
+                        };
+                    }
+                }
+            }
+            
+            // Strategy 2: Check for explicit Next button via aria-label
+            const ariaBtn = document.querySelector('button[aria-label*="Next" i], button[aria-label*="تالي" i], [role="button"][aria-label*="Next" i]');
+            if (ariaBtn) {
+                const isDis = ariaBtn.disabled === true || ariaBtn.getAttribute('aria-disabled') === 'true';
+                return {
+                    has_pagination: true,
+                    current_text: '',
+                    has_next: !isDis,
+                    is_last_page: isDis
+                };
+            }
+            
+            return {
+                has_pagination: false,
+                current_text: '',
+                has_next: false,
+                is_last_page: true
+            };
+        }""")
+        return info or {"has_pagination": False, "has_next": False}
+    except Exception as e:
+        logger.warning("Failed to evaluate pagination info: %s", e)
+        return {"has_pagination": False, "has_next": False}
+
+
+def click_next_page(page: Page, previous_text: str = "") -> bool:
+    """Click the next page button and wait for the new batch of collection cards to render."""
+    try:
+        clicked = page.evaluate("""() => {
+            const regex = /\\b(\\d+)[\\s–-]+(\\d+)\\s+(?:of|من|de|sur|\\/)\\s+(\\d+)\\b/i;
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let node;
+            while (node = walker.nextNode()) {
+                const text = node.textContent.trim();
+                const match = regex.exec(text);
+                if (match) {
+                    const container = node.parentElement ? (node.parentElement.closest('div, nav, footer') || node.parentElement) : null;
+                    if (container) {
+                        const buttons = Array.from(container.querySelectorAll('button, div[role="button"], span[role="button"], a'));
+                        let nextBtn = buttons.find(b => {
+                            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                            return aria.includes('next') || aria.includes('تالي') || aria.includes('chevron_right');
+                        });
+                        if (!nextBtn && buttons.length >= 2) {
+                            const afterButtons = buttons.filter(b => (node.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+                            nextBtn = afterButtons.length > 0 ? afterButtons[0] : buttons[buttons.length - 1];
+                        }
+                        if (nextBtn) {
+                            const isDis = nextBtn.disabled === true || nextBtn.getAttribute('aria-disabled') === 'true';
+                            if (!isDis) {
+                                nextBtn.click();
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: aria-label next
+            const ariaBtn = document.querySelector('button[aria-label*="Next" i], button[aria-label*="تالي" i], [role="button"][aria-label*="Next" i]');
+            if (ariaBtn) {
+                const isDis = ariaBtn.disabled === true || ariaBtn.getAttribute('aria-disabled') === 'true';
+                if (!isDis) {
+                    ariaBtn.click();
+                    return true;
+                }
+            }
+            return false;
+        }""")
+        
+        if not clicked:
+            return False
+            
+        logger.info("Clicked Next Page button. Waiting for page transition...")
+        time.sleep(1.5)
+        # Scroll back to top to let lazy observers catch the new cards
+        page.evaluate("window.scrollTo(0, 0)")
+        time.sleep(1.5)
+        
+        try:
+            page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+            
+        return True
+    except Exception as e:
+        logger.warning("Error clicking next page button: %s", e)
+        return False
+
+
+def extract_all_collection_pages(
+    page: Page,
+    intercepted_items: Optional[List[Dict[str, Any]]] = None,
+    page_callback: Optional[Callable[[int, int], None]] = None,
+    scroll_callback: Optional[Callable[[int], None]] = None,
+    scroll_delay: float = SCROLL_DELAY,
+    max_scrolls: int = MAX_SCROLLS,
+    no_change_limit: int = NO_CHANGE_LIMIT,
+    max_pages: int = 30,
+) -> Tuple[List[Dict[str, Any]], str, int]:
+    """Orchestrates infinite-scroll extraction across all pagination pages.
+    
+    Handles single-page collections and multi-page collections (e.g. 1-200 of 234),
+    accumulates items from each page, advances pages via Next button, and deduplicates.
+    
+    Returns:
+        (unique_items, strategy_used, total_pages_processed)
+    """
+    all_raw_items: List[Dict[str, Any]] = []
+    strategies_used: List[str] = []
+    current_page = 1
+
+    while current_page <= max_pages:
+        if page_callback:
+            page_callback(current_page, len(all_raw_items))
+
+        # 1. Scroll the current page until fully loaded
+        scroll_until_complete(
+            page,
+            progress_callback=scroll_callback,
+            scroll_delay=scroll_delay,
+            max_scrolls=max_scrolls,
+            no_change_limit=no_change_limit,
+        )
+
+        # 2. Extract items from current page
+        page_items, strat = extract_collection_data(page, intercepted_items=intercepted_items)
+        if strat not in strategies_used:
+            strategies_used.append(strat)
+        all_raw_items.extend(page_items)
+        logger.info("Page %d complete: collected %d items from this page (running total: %d).",
+                    current_page, len(page_items), len(all_raw_items))
+
+        # 3. Check pagination info
+        pag_info = get_pagination_info(page)
+        logger.info("Pagination state on page %d: %s", current_page, pag_info)
+
+        if not pag_info.get("has_next"):
+            logger.info("Reached the final page of the collection (%d pages processed).", current_page)
+            break
+
+        # 4. Click Next Page and transition
+        prev_text = pag_info.get("current_text", "")
+        success = click_next_page(page, previous_text=prev_text)
+        if not success:
+            logger.info("No further pages accessible or next button reached limit.")
+            break
+
+        current_page += 1
+
+    unique_items = remove_duplicates_preserve_order(all_raw_items)
+    primary_strat = strategies_used[0] if strategies_used else "Multi-Page DOM Extraction"
+    return unique_items, primary_strat, current_page
+
+
 def save_debug_artifacts(page: Optional[Page], log_messages: Optional[List[str]] = None) -> None:
     """Save screenshot, full HTML dump, and logs to debug/ for troubleshooting."""
     try:

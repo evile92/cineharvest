@@ -41,6 +41,7 @@ from extractor import (
     open_collection,
     scroll_until_complete,
     extract_collection_data,
+    extract_all_collection_pages,
     save_debug_artifacts,
     save_session,
     setup_network_interception,
@@ -257,34 +258,31 @@ def main() -> int:
         time.sleep(2)
 
         print("[+] Scanning collection...")
-        print("[+] Scrolling...")
-        log_and_record("Starting infinite scroll")
+        print("[+] Scanning collection & handling multi-page navigation...")
+        log_and_record("Starting infinite scroll with multi-page pagination detection")
 
         discovered_counts = []
 
         def on_item_discovered(count: int):
             discovered_counts.append(count)
-            print(f"[+] Items discovered: {count}")
+            print(f"[+] Items discovered on current page: {count}")
             log_and_record(f"Items discovered: {count}")
 
-        scroll_until_complete(
+        def on_page_change(page_num: int, count_so_far: int):
+            print(f"[+] Processing page {page_num}... ({count_so_far} items collected)")
+            log_and_record(f"Processing page {page_num} ({count_so_far} items collected)")
+
+        unique_items, strategy_used, total_pages = extract_all_collection_pages(
             page,
-            progress_callback=on_item_discovered,
+            intercepted_items=intercepted_network_items,
+            page_callback=on_page_change,
+            scroll_callback=on_item_discovered,
             scroll_delay=args.scroll_delay,
             max_scrolls=args.max_scrolls,
             no_change_limit=NO_CHANGE_LIMIT,
         )
-
-        print("[+] Extracting titles...")
-        print("[+] Cleaning data...")
-        print("[+] Removing duplicates...")
-        log_and_record("Executing multi-strategy data extraction")
-
-        unique_items, strategy_used = extract_collection_data(
-            page,
-            intercepted_items=intercepted_network_items,
-        )
-        log_and_record(f"Strategy used: {strategy_used}, total items: {len(unique_items)}")
+        print(f"[+] Extraction complete across {total_pages} page(s). Total unique titles: {len(unique_items)}")
+        log_and_record(f"Extraction complete across {total_pages} pages, strategy: {strategy_used}, total unique items: {len(unique_items)}")
 
         # Automatic Media Enrichment (YTS Torrents, Magnets & Wikipedia Synopsis)
         if not args.no_enrich:
