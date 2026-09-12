@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+import urllib.parse
 from typing import Callable, Dict, Any, List, Optional, Tuple
 
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, Playwright
@@ -474,8 +475,22 @@ def get_pagination_info(page: Page) -> Dict[str, Any]:
         return {"has_pagination": False, "has_next": False}
 
 
-def click_next_page(page: Page, previous_text: str = "") -> bool:
-    """Click the next page button and wait for the new batch of collection cards to render."""
+def build_page_number_url(current_url: str, page_number: int) -> str:
+    """Build or update the pageNumber parameter in a Google Collection URL."""
+    try:
+        parsed = urllib.parse.urlparse(current_url)
+        query_params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        query_params["pageNumber"] = [str(page_number)]
+        new_query = urllib.parse.urlencode(query_params, doseq=True)
+        return urllib.parse.urlunparse(parsed._replace(query=new_query))
+    except Exception:
+        delimiter = "&" if "?" in current_url else "?"
+        return f"{current_url}{delimiter}pageNumber={page_number}"
+
+
+def click_next_page(page: Page, previous_text: str = "", next_page_number: Optional[int] = None) -> bool:
+    """Click the next page button or fall back to direct ?pageNumber=X URL navigation."""
+    # Attempt 1: Click the Next page button in the DOM
     try:
         clicked = page.evaluate("""() => {
             const regex = /\\b(\\d+)[\\s–-]+(\\d+)\\s+(?:of|من|de|sur|\\/)\\s+(\\d+)\\b/i;
@@ -519,24 +534,35 @@ def click_next_page(page: Page, previous_text: str = "") -> bool:
             return false;
         }""")
         
-        if not clicked:
-            return False
-            
-        logger.info("Clicked Next Page button. Waiting for page transition...")
-        time.sleep(1.5)
-        # Scroll back to top to let lazy observers catch the new cards
-        page.evaluate("window.scrollTo(0, 0)")
-        time.sleep(1.5)
-        
-        try:
-            page.wait_for_load_state("networkidle", timeout=5000)
-        except Exception:
-            pass
-            
-        return True
+        if clicked:
+            logger.info("Clicked Next Page button in DOM. Waiting for transition...")
+            time.sleep(1.5)
+            page.evaluate("window.scrollTo(0, 0)")
+            time.sleep(1.5)
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            return True
     except Exception as e:
-        logger.warning("Error clicking next page button: %s", e)
-        return False
+        logger.warning("Error clicking next page button in DOM: %s", e)
+
+    # Attempt 2: Direct URL navigation fallback using ?pageNumber=X
+    if next_page_number is not None:
+        try:
+            target_url = build_page_number_url(page.url, next_page_number)
+            logger.info("Using URL navigation fallback: %s", target_url)
+            page.goto(target_url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
+            time.sleep(2.0)
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            return True
+        except Exception as nav_e:
+            logger.warning("URL navigation fallback failed: %s", nav_e)
+
+    return False
 
 
 def extract_all_collection_pages(
@@ -590,11 +616,12 @@ def extract_all_collection_pages(
             logger.info("Reached the final page of the collection (%d pages processed).", current_page)
             break
 
-        # 4. Click Next Page and transition
+        # 4. Advance to Next Page (Dual-Layer: Button click + ?pageNumber=X fallback)
         prev_text = pag_info.get("current_text", "")
-        success = click_next_page(page, previous_text=prev_text)
+        next_page_num = current_page + 1
+        success = click_next_page(page, previous_text=prev_text, next_page_number=next_page_num)
         if not success:
-            logger.info("No further pages accessible or next button reached limit.")
+            logger.info("No further pages accessible or pagination reached the end.")
             break
 
         current_page += 1
