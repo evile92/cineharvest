@@ -604,15 +604,27 @@ def extract_all_collection_pages(
         page_items, strat = extract_collection_data(page, intercepted_items=intercepted_items)
         if strat not in strategies_used:
             strategies_used.append(strat)
+
+        # Check for new unique titles added on this page
+        existing_titles = {x.get("title", "").strip().lower() for x in all_raw_items if x.get("title")}
+        new_items_this_page = [
+            it for it in page_items
+            if it.get("title", "").strip().lower() not in existing_titles
+        ]
+
+        if current_page > 1 and len(new_items_this_page) == 0:
+            logger.info("Page %d yielded 0 new items. All pages successfully extracted.", current_page)
+            break
+
         all_raw_items.extend(page_items)
-        logger.info("Page %d complete: collected %d items from this page (running total: %d).",
-                    current_page, len(page_items), len(all_raw_items))
+        logger.info("Page %d complete: collected %d items from this page (%d new, running total: %d).",
+                    current_page, len(page_items), len(new_items_this_page), len(all_raw_items))
 
         # 3. Check pagination info
         pag_info = get_pagination_info(page)
         logger.info("Pagination state on page %d: %s", current_page, pag_info)
 
-        if not pag_info.get("has_next"):
+        if pag_info.get("has_pagination") and (pag_info.get("is_last_page") or not pag_info.get("has_next")):
             logger.info("Reached the final page of the collection (%d pages processed).", current_page)
             break
 
