@@ -5,6 +5,7 @@ __pycache__/
 
 # Debug and runtime artifacts
 debug/
+output/
 *.log
 *.png
 

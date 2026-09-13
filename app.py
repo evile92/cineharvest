@@ -754,7 +754,7 @@ if st.session_state.app_mode == "collection":
 
         filtered_items = items
         if filter_val == t["movie"]:
-            filtered_items = [x for x in filtered_items if x.get("type") == "movie"]
+            filtered_items = [x for x in filtered_items if x.get("type") != "tv"]
         elif filter_val == t["tv"]:
             filtered_items = [x for x in filtered_items if x.get("type") == "tv"]
 

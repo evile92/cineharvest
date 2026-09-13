@@ -34,7 +34,33 @@ YTS_API_URL = "https://movies-api.accel.li/api/v2/list_movies.json"
 EZTV_API_URL = "https://eztvx.to/api/get-torrents"
 WIKI_SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/summary"
 WIKI_AR_SUMMARY_URL = "https://ar.wikipedia.org/api/rest_v1/page/summary"
+WIKI_SEARCH_URL = "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json"
 HEADERS = {"User-Agent": "GoogleCollectionMediaExtractor/2.0 (OpenSource)"}
+
+TV_TYPE_PATTERNS = re.compile(
+    r"\b("
+    r"television series|tv series|tv show|television show|"
+    r"miniseries|mini-series|television miniseries|tv miniseries|"
+    r"sitcom|comedy series|drama series|crime drama series|"
+    r"animated series|anime series|docuseries|documentary series|"
+    r"television program|tv program|serial drama|soap opera|telenovela|"
+    r"web series|limited series|anthology series|"
+    r"مسلسل|سلسلة تلفزيونية|برنامج تلفزيوني|مسلسل قصير"
+    r")\b",
+    re.I,
+)
+
+MOVIE_TYPE_PATTERNS = re.compile(
+    r"\b("
+    r"feature film|short film|television film|tv film|tv movie|television movie|"
+    r"direct-to-video film|animated film|documentary film|concert film|"
+    r"comedy film|drama film|action film|horror film|thriller film|science fiction film|"
+    r"film directed by|directed by|film starring|film written|film produced|"
+    r"film released|american film|british film|french film|film\b|movie\b|motion picture|"
+    r"فيلم|شريط سينمائي"
+    r")\b",
+    re.I,
+)
 
 # Number-to-word translation for query fallback
 NUM_MAP = {
@@ -123,7 +149,7 @@ def fetch_yts_movie_data(title: str) -> Optional[Dict[str, Any]]:
             best_movie = m
 
     # Require minimum similarity to avoid matching completely different movies
-    if best_score < 0.45 or not best_movie:
+    if best_score < 0.65 or not best_movie:
         return None
 
     torrents_list = []
@@ -184,42 +210,120 @@ def fetch_eztv_torrents(imdb_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def fetch_wikipedia_details(title: str, media_type: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
-    """Fetch a concise overview and poster/thumbnail image from Wikipedia's free REST API."""
-    candidates = [title]
-    if media_type == "tv":
-        candidates.extend([f"{title} (TV series)", f"{title} (series)"])
-    elif media_type == "movie":
-        candidates.extend([f"{title} (film)", f"{title} (movie)"])
-    else:
-        candidates.extend([f"{title} (film)", f"{title} (TV series)"])
+def _inspect_wiki_page(candidate: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Helper to query a single Wikipedia title and extract summary, poster, and media type."""
+    encoded = urllib.parse.quote(candidate.replace(" ", "_"))
+    url = f"{WIKI_SUMMARY_URL}/{encoded}"
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("type") == "disambiguation":
+                return None, None, None
 
-    for candidate in candidates:
-        encoded = urllib.parse.quote(candidate.replace(" ", "_"))
-        url = f"{WIKI_SUMMARY_URL}/{encoded}"
-        try:
-            req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                extract = data.get("extract")
-                image_url = (
-                    data.get("thumbnail", {}).get("source")
-                    or data.get("originalimage", {}).get("source")
-                )
-                cleaned = None
-                if extract and len(extract.strip()) > 20:
-                    cleaned = re.sub(r"\s+", " ", extract).strip()
-                if cleaned or image_url:
-                    return cleaned, image_url
-        except Exception:
-            continue
+            extract = data.get("extract")
+            desc = data.get("description", "")
+            image_url = (
+                data.get("thumbnail", {}).get("source")
+                or data.get("originalimage", {}).get("source")
+            )
+            cleaned = None
+            if extract and len(extract.strip()) > 20:
+                cleaned = re.sub(r"\s+", " ", extract).strip()
 
+            if "refer to:" in (cleaned or "") or "may refer to:" in (cleaned or ""):
+                return None, None, None
+
+            text_to_check = f"{desc} {cleaned or ''}"
+            detected_type = None
+            if TV_TYPE_PATTERNS.search(text_to_check) and not MOVIE_TYPE_PATTERNS.search(desc):
+                detected_type = "tv"
+            elif MOVIE_TYPE_PATTERNS.search(text_to_check):
+                detected_type = "movie"
+
+            return cleaned, image_url, detected_type
+    except Exception:
+        return None, None, None
+
+
+def search_wikipedia_media_title(title: str) -> Tuple[Optional[str], Optional[str]]:
+    """Search Wikipedia for title to find TV series or Film pages."""
+    try:
+        url = f"{WIKI_SEARCH_URL}&srsearch={urllib.parse.quote(title)}&srlimit=6"
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            results = data.get("query", {}).get("search", [])
+            for r in results:
+                t = r.get("title", "")
+                clean_t = re.sub(r"\s*\([^)]*\)", "", t).strip().lower()
+                if clean_t == title.lower() or t.lower().startswith(title.lower() + " ("):
+                    if re.search(r"\b(tv series|television series|miniseries|series)\b", t, re.I):
+                        return t, "tv"
+                    if re.search(r"\b(film|movie)\b", t, re.I):
+                        return t, "movie"
+    except Exception:
+        pass
     return None, None
+
+
+def fetch_wikipedia_details(
+    title: str, media_type: Optional[str] = None
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Fetch a concise overview, poster image, and media type ('tv' or 'movie') from Wikipedia."""
+    if media_type == "tv":
+        candidates = [f"{title} (TV series)", f"{title} (miniseries)", f"{title} (series)", title]
+        for cand in candidates:
+            s, p, dt = _inspect_wiki_page(cand)
+            if s or p:
+                return s, p, dt or "tv"
+        return None, None, "tv"
+
+    if media_type == "movie":
+        candidates = [title, f"{title} (film)", f"{title} (movie)"]
+        for cand in candidates:
+            s, p, dt = _inspect_wiki_page(cand)
+            if s or p:
+                return s, p, dt or "movie"
+        return None, None, "movie"
+
+    # When media_type is unknown:
+    # 1. First check the direct title
+    summary, poster, detected_type = _inspect_wiki_page(title)
+    if detected_type:
+        return summary, poster, detected_type
+
+    # 2. Check (film) candidate
+    for cand in [f"{title} (film)", f"{title} (movie)"]:
+        s, p, dt = _inspect_wiki_page(cand)
+        if dt == "movie" or (s and MOVIE_TYPE_PATTERNS.search(s[:200])):
+            return s, p, "movie"
+
+    # 3. Check TV candidates
+    for cand in [f"{title} (TV series)", f"{title} (miniseries)", f"{title} (series)"]:
+        s, p, dt = _inspect_wiki_page(cand)
+        if dt == "tv" or (s and TV_TYPE_PATTERNS.search(s[:200])):
+            return s, p, "tv"
+        if s or p:
+            return s, p, "tv"
+
+    # 4. Search API fallback (e.g. 'Fallout (American TV series)')
+    hit_title, hit_type = search_wikipedia_media_title(title)
+    if hit_title:
+        s, p, dt = _inspect_wiki_page(hit_title)
+        if s or p:
+            return s, p, dt or hit_type
+
+    # 5. Direct summary fallback if available
+    if summary or poster:
+        return summary, poster, detected_type
+
+    return None, None, None
 
 
 def fetch_wikipedia_summary(title: str, media_type: Optional[str] = None) -> Optional[str]:
     """Fetch a concise 2-3 sentence overview from Wikipedia's free REST API."""
-    summary, _ = fetch_wikipedia_details(title, media_type)
+    summary, _, _ = fetch_wikipedia_details(title, media_type)
     return summary
 
 
@@ -282,10 +386,19 @@ def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
     title = item.get("title", "")
     known_type = item.get("type")
 
-    # 1. Search YTS for movie torrents, year, rating, and synopsis
-    if known_type != "tv":
+    # 1. Fetch Wikipedia details & detect media type (tv vs movie)
+    wiki_summary, wiki_poster, detected_type = fetch_wikipedia_details(
+        title, media_type=known_type
+    )
+    final_type = known_type or detected_type
+
+    yts_data = None
+    # 2. Search YTS for movie torrents, year, rating, and synopsis ONLY if not TV series
+    if final_type != "tv":
         yts_data = fetch_yts_movie_data(title)
         if yts_data:
+            if not final_type:
+                final_type = "movie"
             if not enriched.get("year") and yts_data.get("year"):
                 enriched["year"] = yts_data["year"]
             if not enriched.get("rating") and yts_data.get("rating"):
@@ -298,30 +411,32 @@ def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
                 enriched["torrents"] = yts_data["torrents"]
             if yts_data.get("imdb_code"):
                 enriched["imdb_code"] = yts_data["imdb_code"]
-            if not enriched.get("type"):
-                enriched["type"] = "movie"
 
-    # 2. Check EZTV if imdb_code is available and item is a show
-    if enriched.get("imdb_code") and enriched.get("type") == "tv":
+    # 3. Check EZTV if imdb_code is available and item is a TV show
+    if enriched.get("imdb_code") and final_type == "tv":
         eztv_torrents = fetch_eztv_torrents(enriched["imdb_code"])
         if eztv_torrents:
             enriched["torrents"] = eztv_torrents
 
-    # 3. If no synopsis yet or no poster, query Wikipedia (ideal for TV series or unindexed films)
-    if not enriched.get("synopsis") or not enriched.get("poster_url"):
-        wiki_summary, wiki_poster = fetch_wikipedia_details(title, media_type=known_type or enriched.get("type"))
-        if not enriched.get("synopsis") and wiki_summary:
-            enriched["synopsis"] = wiki_summary
-        if not enriched.get("poster_url") and wiki_poster:
-            enriched["poster_url"] = wiki_poster
+    # 4. Fill in missing synopsis or poster from Wikipedia
+    if not enriched.get("synopsis") and wiki_summary:
+        enriched["synopsis"] = wiki_summary
+    if not enriched.get("poster_url") and wiki_poster:
+        enriched["poster_url"] = wiki_poster
 
-    # 4. Fetch native Arabic plot overview
+    # 5. Finalize media type: default to movie if still undetermined
+    if not final_type:
+        final_type = "movie"
+
+    enriched["type"] = final_type
+
+    # 6. Fetch native Arabic plot overview
     if not enriched.get("synopsis_ar"):
-        ar_summary = fetch_arabic_wikipedia_summary(title, media_type=known_type or enriched.get("type"))
+        ar_summary = fetch_arabic_wikipedia_summary(title, media_type=final_type)
         if ar_summary:
             enriched["synopsis_ar"] = ar_summary
 
-    # 5. Determine Genres
+    # 7. Determine Genres
     item_genres = []
     if yts_data and yts_data.get("genres"):
         item_genres = yts_data["genres"]
@@ -329,7 +444,7 @@ def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
         item_genres = detect_genres_from_text(enriched["synopsis"])
 
     if not item_genres:
-        item_genres = ["Drama"] if enriched.get("type") == "tv" else ["Other"]
+        item_genres = ["Drama"] if final_type == "tv" else ["Other"]
 
     enriched["genres"] = item_genres
     enriched["primary_genre"] = item_genres[0] if item_genres else "Other"
@@ -451,9 +566,9 @@ def search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Di
                     continue
                 seen_titles.add(clean_wt.lower())
 
-                w_summary, w_poster = fetch_wikipedia_details(wt)
+                w_summary, w_poster, w_type = fetch_wikipedia_details(wt)
                 if w_summary or w_poster:
-                    media_type = "tv" if "series" in wt.lower() or "season" in wt.lower() else "movie"
+                    media_type = w_type or ("tv" if "series" in wt.lower() or "season" in wt.lower() else "movie")
                     w_genres = detect_genres_from_text(w_summary) if w_summary else []
                     if not w_genres:
                         w_genres = ["Drama"] if media_type == "tv" else ["Other"]

@@ -125,10 +125,23 @@ def detect_media_type(text_or_metadata: Optional[str]) -> Optional[str]:
         "tv series",
         "television series",
         "tv mini series",
+        "television miniseries",
+        "tv miniseries",
         "tv show",
+        "television show",
+        "miniseries",
+        "mini-series",
+        "docuseries",
+        "sitcom",
         "series",
+        "limited series",
+        "anthology series",
+        "animated series",
+        "anime series",
         "مسلسل",
         "برنامج تلفزيوني",
+        "مسلسل قصير",
+        "سلسلة تلفزيونية",
     ]
     for marker in tv_markers:
         if marker in meta_lower:
@@ -136,10 +149,13 @@ def detect_media_type(text_or_metadata: Optional[str]) -> Optional[str]:
 
     # Distinct Movie markers
     movie_markers = [
+        "feature film",
+        "short film",
+        "motion picture",
         "film",
         "movie",
-        "feature film",
         "فيلم",
+        "شريط سينمائي",
     ]
     for marker in movie_markers:
         if marker in meta_lower:
