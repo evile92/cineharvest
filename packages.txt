@@ -22,3 +22,4 @@ libcairo-gobject2
 libgdk-pixbuf-2.0-0
 libx11-xcb1
 ffmpeg
+nodejs

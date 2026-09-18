@@ -53,78 +53,104 @@ def is_playlist_url(url: str) -> bool:
     return "playlist?list=" in u or ("list=" in u and "watch?v=" not in u)
 
 
+YOUTUBE_CLIENT_STRATEGIES = [
+    ["android", "web"],
+    ["web", "android"],
+    ["mweb", "android"],
+]
+
+
 def extract_media_info(url: str, is_playlist: Optional[bool] = None) -> Dict[str, Any]:
     """Extract metadata for a single YouTube video or an entire playlist without downloading."""
     if is_playlist is None:
         is_playlist = is_playlist_url(url)
 
     ffmpeg_exe = get_ffmpeg_path()
-    ydl_opts: Dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-    }
-    if ffmpeg_exe:
-        ydl_opts["ffmpeg_location"] = ffmpeg_exe
+    info = None
+    last_err: Optional[Exception] = None
 
-    if is_playlist:
-        ydl_opts["extract_flat"] = "in_playlist"
-    else:
-        ydl_opts["extract_flat"] = False
+    for client_strategy in YOUTUBE_CLIENT_STRATEGIES:
+        ydl_opts: Dict[str, Any] = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "js_runtimes": {"node": {}, "deno": {}},
+            "extractor_args": {
+                "youtube": {
+                    "player_client": client_strategy,
+                }
+            },
+        }
+        if ffmpeg_exe:
+            ydl_opts["ffmpeg_location"] = ffmpeg_exe
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if not info:
-            raise ValueError("Failed to retrieve media information from YouTube.")
+        if is_playlist:
+            ydl_opts["extract_flat"] = "in_playlist"
+        else:
+            ydl_opts["extract_flat"] = False
 
-        # Check if the extracted info is indeed a playlist
-        entries = info.get("entries")
-        if entries is not None:
-            # Playlist structure
-            clean_entries = []
-            for idx, entry in enumerate(entries, 1):
-                if not entry:
-                    continue
-                entry_url = entry.get("url") or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get("id") else None)
-                clean_entries.append({
-                    "index": idx,
-                    "id": entry.get("id"),
-                    "title": entry.get("title", f"Video {idx}"),
-                    "duration": entry.get("duration"),
-                    "uploader": entry.get("uploader", "Unknown"),
-                    "url": entry_url,
-                })
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    break
+        except Exception as e:
+            last_err = e
+            continue
 
-            thumbnail = info.get("thumbnails", [{}])[-1].get("url") if info.get("thumbnails") else None
-            if not thumbnail and clean_entries:
-                first_id = clean_entries[0].get("id")
-                if first_id:
-                    thumbnail = f"https://i.ytimg.com/vi/{first_id}/hqdefault.jpg"
+    if not info:
+        if last_err:
+            raise last_err
+        raise ValueError("Failed to retrieve media information from YouTube.")
 
-            return {
-                "is_playlist": True,
-                "title": info.get("title", "YouTube Playlist"),
-                "uploader": info.get("uploader") or info.get("channel") or "Unknown Channel",
-                "thumbnail": thumbnail,
-                "video_count": len(clean_entries),
-                "entries": clean_entries,
-            }
+    # Check if the extracted info is indeed a playlist
+    entries = info.get("entries")
+    if entries is not None:
+        # Playlist structure
+        clean_entries = []
+        for idx, entry in enumerate(entries, 1):
+            if not entry:
+                continue
+            entry_url = entry.get("url") or (f"https://www.youtube.com/watch?v={entry.get('id')}" if entry.get("id") else None)
+            clean_entries.append({
+                "index": idx,
+                "id": entry.get("id"),
+                "title": entry.get("title", f"Video {idx}"),
+                "duration": entry.get("duration"),
+                "uploader": entry.get("uploader", "Unknown"),
+                "url": entry_url,
+            })
 
-        # Single video structure
-        thumbnail = info.get("thumbnail")
-        if not thumbnail and info.get("thumbnails"):
-            thumbnail = info.get("thumbnails")[-1].get("url")
+        thumbnail = info.get("thumbnails", [{}])[-1].get("url") if info.get("thumbnails") else None
+        if not thumbnail and clean_entries:
+            first_id = clean_entries[0].get("id")
+            if first_id:
+                thumbnail = f"https://i.ytimg.com/vi/{first_id}/hqdefault.jpg"
 
         return {
-            "is_playlist": False,
-            "id": info.get("id"),
-            "title": info.get("title", "YouTube Video"),
+            "is_playlist": True,
+            "title": info.get("title", "YouTube Playlist"),
             "uploader": info.get("uploader") or info.get("channel") or "Unknown Channel",
-            "duration": info.get("duration", 0),
-            "view_count": info.get("view_count"),
             "thumbnail": thumbnail,
-            "url": url,
+            "video_count": len(clean_entries),
+            "entries": clean_entries,
         }
+
+    # Single video structure
+    thumbnail = info.get("thumbnail")
+    if not thumbnail and info.get("thumbnails"):
+        thumbnail = info.get("thumbnails")[-1].get("url")
+
+    return {
+        "is_playlist": False,
+        "id": info.get("id"),
+        "title": info.get("title", "YouTube Video"),
+        "uploader": info.get("uploader") or info.get("channel") or "Unknown Channel",
+        "duration": info.get("duration", 0),
+        "view_count": info.get("view_count"),
+        "thumbnail": thumbnail,
+        "url": url,
+    }
 
 
 def download_single_video(
@@ -146,6 +172,12 @@ def download_single_video(
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": False,
+        "js_runtimes": {"node": {}, "deno": {}},
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"],
+            }
+        },
     }
 
     if ffmpeg_exe:
@@ -170,13 +202,13 @@ def download_single_video(
         # Video format logic
         q_lower = quality.lower()
         if "1080" in q_lower:
-            format_str = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
+            format_str = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
         elif "720" in q_lower:
-            format_str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+            format_str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best"
         elif "480" in q_lower:
-            format_str = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best"
+            format_str = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best"
         elif "360" in q_lower:
-            format_str = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+            format_str = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best"
         else:
             format_str = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
 

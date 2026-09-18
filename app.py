@@ -51,15 +51,32 @@ from config import (
     SCROLL_DELAY,
     NO_CHANGE_LIMIT,
 )
-from extractor import (
-    launch_browser,
-    open_collection,
-    scroll_until_complete,
-    extract_collection_data,
-    extract_all_collection_pages,
-    setup_network_interception,
-    ExtractionError,
-)
+try:
+    from extractor import (
+        launch_browser,
+        open_collection,
+        scroll_until_complete,
+        extract_collection_data,
+        extract_all_collection_pages,
+        setup_network_interception,
+        ExtractionError,
+    )
+    PLAYWRIGHT_AVAILABLE = True
+    PLAYWRIGHT_IMPORT_ERROR = None
+except Exception as _pe_err:
+    PLAYWRIGHT_AVAILABLE = False
+    PLAYWRIGHT_IMPORT_ERROR = str(_pe_err)
+    launch_browser = None
+    open_collection = None
+    scroll_until_complete = None
+    extract_collection_data = None
+    extract_all_collection_pages = None
+    setup_network_interception = None
+
+    class ExtractionError(Exception):
+        """Fallback ExtractionError when extractor cannot be imported."""
+        pass
+
 from media_enricher import enrich_media_items, search_media_database
 from cleaner import generate_markdown, GENRE_ICONS, GENRE_ARABIC
 from tmdb import enrich_items_with_tmdb
@@ -639,6 +656,8 @@ if st.session_state.app_mode == "collection":
     if start_btn:
         if not url_input.strip():
             st.error(t["invalid_url"])
+        elif not PLAYWRIGHT_AVAILABLE:
+            st.error(f"Playwright automation engine is not available in this environment: {PLAYWRIGHT_IMPORT_ERROR}")
         else:
             status_box = st.status(t["status_title"], expanded=True)
             pw = browser = context = page = None
