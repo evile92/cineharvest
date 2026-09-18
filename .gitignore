@@ -17,7 +17,13 @@ ENV/
 # Authentication and session tokens
 auth/
 *.session.json
+*cookies*
+*.cookies.txt
+
+# Temporary download files
+temp_downloads/
 
 # IDE / Editor files
 .vscode/
 .idea/
+

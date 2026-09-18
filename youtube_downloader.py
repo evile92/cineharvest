@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable, Tuple
@@ -60,16 +61,58 @@ YOUTUBE_CLIENT_STRATEGIES = [
 ]
 
 
-def extract_media_info(url: str, is_playlist: Optional[bool] = None) -> Dict[str, Any]:
+def resolve_cookiefile(
+    cookiefile: Optional[str] = None,
+    cookies_content: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve cookie file path from argument, content string, env vars, or standard locations."""
+    if cookies_content and cookies_content.strip():
+        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix="_cookies.txt", encoding="utf-8")
+        tmp.write(cookies_content.strip())
+        tmp.close()
+        return tmp.name
+
+    if cookiefile and os.path.exists(cookiefile):
+        return cookiefile
+
+    # Check environment variables
+    env_cookies = os.getenv("YOUTUBE_COOKIES")
+    if env_cookies and env_cookies.strip():
+        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix="_cookies.txt", encoding="utf-8")
+        tmp.write(env_cookies.strip())
+        tmp.close()
+        return tmp.name
+
+    env_path = os.getenv("YOUTUBE_COOKIEFILE")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    # Check project standard locations
+    for loc in [Path("cookies.txt"), Path("auth/cookies.txt"), Path(".streamlit/cookies.txt")]:
+        if loc.exists():
+            return str(loc.resolve())
+
+    return None
+
+
+def extract_media_info(
+    url: str,
+    is_playlist: Optional[bool] = None,
+    cookiefile: Optional[str] = None,
+    cookies_content: Optional[str] = None,
+) -> Dict[str, Any]:
     """Extract metadata for a single YouTube video or an entire playlist without downloading."""
     if is_playlist is None:
         is_playlist = is_playlist_url(url)
 
     ffmpeg_exe = get_ffmpeg_path()
+    resolved_cookies = resolve_cookiefile(cookiefile, cookies_content)
     info = None
     last_err: Optional[Exception] = None
 
-    for client_strategy in YOUTUBE_CLIENT_STRATEGIES:
+    strategies = [["default", "web", "android"]] + YOUTUBE_CLIENT_STRATEGIES if resolved_cookies else YOUTUBE_CLIENT_STRATEGIES
+
+    for client_strategy in strategies:
         ydl_opts: Dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
@@ -81,6 +124,8 @@ def extract_media_info(url: str, is_playlist: Optional[bool] = None) -> Dict[str
                 }
             },
         }
+        if resolved_cookies:
+            ydl_opts["cookiefile"] = resolved_cookies
         if ffmpeg_exe:
             ydl_opts["ffmpeg_location"] = ffmpeg_exe
 
@@ -160,10 +205,13 @@ def download_single_video(
     media_format: str = "mp4",  # "mp4", "mp3", "m4a", "wav"
     quality: str = "720p",      # "1080p", "720p", "480p", "360p", "best" or "320k", "192k", "128k"
     progress_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
+    cookiefile: Optional[str] = None,
+    cookies_content: Optional[str] = None,
 ) -> Path:
     """Download a single YouTube video or extract its audio into the target directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
     ffmpeg_exe = get_ffmpeg_path()
+    resolved_cookies = resolve_cookiefile(cookiefile, cookies_content)
 
     outtmpl = str(output_dir / "%(title).120s.%(ext)s")
 
@@ -179,6 +227,9 @@ def download_single_video(
             }
         },
     }
+
+    if resolved_cookies:
+        ydl_opts["cookiefile"] = resolved_cookies
 
     if ffmpeg_exe:
         ydl_opts["ffmpeg_location"] = ffmpeg_exe
@@ -267,9 +318,16 @@ def download_playlist_media(
     selected_indices: Optional[List[int]] = None,
     item_callback: Optional[Callable[[int, int, str], None]] = None,
     progress_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
+    cookiefile: Optional[str] = None,
+    cookies_content: Optional[str] = None,
 ) -> Tuple[Path, List[Path]]:
     """Download multiple videos from a playlist, convert formats, and compress into a single ZIP archive."""
-    playlist_info = extract_media_info(playlist_url, is_playlist=True)
+    playlist_info = extract_media_info(
+        playlist_url,
+        is_playlist=True,
+        cookiefile=cookiefile,
+        cookies_content=cookies_content,
+    )
     entries = playlist_info.get("entries", [])
     playlist_title = sanitize_filename(playlist_info.get("title", "YouTube_Playlist"))
 
@@ -298,6 +356,8 @@ def download_playlist_media(
                 media_format=media_format,
                 quality=quality,
                 progress_hook=progress_hook,
+                cookiefile=cookiefile,
+                cookies_content=cookies_content,
             )
             downloaded_paths.append(downloaded)
         except Exception as e:

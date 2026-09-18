@@ -194,6 +194,13 @@ TRANSLATIONS = {
         "yt_download_complete": "✅ Download complete! Click below to save to your device:",
         "yt_btn_save_file": "💾 Save Media File",
         "yt_btn_save_zip": "📦 Save Playlist ZIP Archive",
+        "yt_bypass_expander": "🔐 Bypass Cloud Restrictions / Cookies (Recommended for Streamlit Cloud)",
+        "yt_bypass_desc": "YouTube blocks datacenter IPs (like Streamlit Cloud). You can bypass this by uploading or pasting your YouTube `cookies.txt` (from browser extension like *Get cookies.txt LOCALLY*).",
+        "yt_cookies_auto_detected": "✅ YouTube cookies automatically detected from Cloud Secrets or local file.",
+        "yt_cookies_upload": "Upload cookies.txt file:",
+        "yt_cookies_paste": "Or paste cookies.txt content:",
+        "yt_cookies_active": "✅ Active cookies loaded for this session ({count} bytes).",
+        "yt_cookies_clear": "Clear Cookies",
     },
     "ar": {
         "page_title": "CineHarvest - مستخرج وسائط وباحث الأفلام",
@@ -300,6 +307,13 @@ TRANSLATIONS = {
         "yt_download_complete": "✅ اكتمل التحميل والمعالجة بنجاح! اضغط الزر أدناه لحفظ الملف:",
         "yt_btn_save_file": "💾 حفظ الملف المحمل",
         "yt_btn_save_zip": "📦 حفظ قائمة التشغيل (ملف ZIP مضغوط)",
+        "yt_bypass_expander": "🔐 تجاوز حظر يوتيوب في السحابة (Cookies) (موصى به لـ Streamlit Cloud)",
+        "yt_bypass_desc": "يوتيوب يحظر خوادم السحابة (Streamlit Cloud / AWS). لتجاوز الحظر فوراً، يمكنك رفع أو لصق ملف `cookies.txt` من متصفحك لحسابك (عبر إضافة آمنة مثل *Get cookies.txt LOCALLY*).",
+        "yt_cookies_auto_detected": "✅ تم التعرف على ملف الكوكيز تلقائياً من إعدادات السحابة (Streamlit Secrets) أو الملف المحلي.",
+        "yt_cookies_upload": "رفع ملف cookies.txt:",
+        "yt_cookies_paste": "أو الصق محتوى cookies.txt هنا:",
+        "yt_cookies_active": "✅ تم تفعيل الكوكيز بنجاح لهذه الجلسة ({count} بايت).",
+        "yt_cookies_clear": "حذف الكوكيز",
     },
 }
 
@@ -1091,7 +1105,46 @@ elif st.session_state.app_mode == "search":
 elif st.session_state.app_mode == "youtube":
     st.markdown("---")
     st.subheader(t["yt_title"])
-    st.caption(t["yt_subtitle"])
+    def get_effective_cookies() -> Optional[str]:
+        """Retrieve cookies from session state, Streamlit secrets, or environment."""
+        if st.session_state.get("yt_custom_cookies"):
+            return st.session_state.yt_custom_cookies
+        try:
+            if "YOUTUBE_COOKIES" in st.secrets:
+                return str(st.secrets["YOUTUBE_COOKIES"])
+            if "youtube_cookies" in st.secrets:
+                return str(st.secrets["youtube_cookies"])
+        except Exception:
+            pass
+        return None
+
+    effective_cookies = get_effective_cookies()
+
+    with st.expander(t["yt_bypass_expander"], expanded=False):
+        st.caption(t["yt_bypass_desc"])
+        if effective_cookies:
+            st.success(t["yt_cookies_active"].format(count=len(effective_cookies)))
+            if st.button(t["yt_cookies_clear"], key="yt_clear_cookies_btn"):
+                st.session_state.yt_custom_cookies = None
+                st.rerun()
+        else:
+            cookie_file = st.file_uploader(t["yt_cookies_upload"], type=["txt"], key="yt_cookie_file_up")
+            if cookie_file is not None:
+                try:
+                    c_content = cookie_file.getvalue().decode("utf-8", errors="ignore")
+                    if c_content.strip():
+                        st.session_state.yt_custom_cookies = c_content.strip()
+                        st.success(t["yt_cookies_active"].format(count=len(c_content.strip())))
+                        st.rerun()
+                except Exception:
+                    pass
+
+            pasted_txt = st.text_area(t["yt_cookies_paste"], placeholder="# Netscape HTTP Cookie File\n...", key="yt_paste_cookies_txt", height=90)
+            if pasted_txt.strip():
+                save_c_lbl = "💾 تفعيل الكوكيز" if st.session_state.lang == "ar" else "💾 Activate Cookies"
+                if st.button(save_c_lbl, key="yt_act_cookies_btn"):
+                    st.session_state.yt_custom_cookies = pasted_txt.strip()
+                    st.rerun()
 
     col_yt_input, col_yt_btn = st.columns([4, 1])
     with col_yt_input:
@@ -1110,7 +1163,7 @@ elif st.session_state.app_mode == "youtube":
         url_clean = yt_url_input.strip()
         with st.spinner(t["yt_fetching_info"]):
             try:
-                info = extract_media_info(url_clean)
+                info = extract_media_info(url_clean, cookies_content=effective_cookies)
                 st.session_state.yt_info = info
                 st.session_state.yt_downloaded_data = None
                 st.session_state.yt_download_filename = None
@@ -1258,6 +1311,7 @@ elif st.session_state.app_mode == "youtube":
                                 selected_indices=selected_indices,
                                 item_callback=on_item,
                                 progress_hook=ui_progress_hook,
+                                cookies_content=effective_cookies,
                             )
                             with open(zip_file, "rb") as f:
                                 st.session_state.yt_downloaded_data = f.read()
@@ -1271,6 +1325,7 @@ elif st.session_state.app_mode == "youtube":
                                 media_format=audio_fmt.lower() if is_audio else "mp4",
                                 quality=bitrate_val if is_audio else res_val,
                                 progress_hook=ui_progress_hook,
+                                cookies_content=effective_cookies,
                             )
                             with open(out_file, "rb") as f:
                                 st.session_state.yt_downloaded_data = f.read()
