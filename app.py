@@ -63,6 +63,12 @@ from extractor import (
 from media_enricher import enrich_media_items, search_media_database
 from cleaner import generate_markdown, GENRE_ICONS, GENRE_ARABIC
 from tmdb import enrich_items_with_tmdb
+from youtube_downloader import (
+    extract_media_info,
+    download_single_video,
+    download_playlist_media,
+    is_playlist_url,
+)
 
 # --- BILINGUAL TRANSLATIONS ---
 TRANSLATIONS = {
@@ -74,6 +80,7 @@ TRANSLATIONS = {
         "mode_label": "Select Feature:",
         "mode_collection": "📂 Google Collection Extractor",
         "mode_search": "🔍 Direct Movie & Series Search",
+        "mode_youtube": "📺 YouTube Downloader (Video & Playlist)",
         "config_header": "⚙️ Configuration",
         "lang_select": "🌐 Language / اللغة",
         "fetch_enrichment": "📥 Fetch Downloads, Synopses & Posters",
@@ -141,6 +148,35 @@ TRANSLATIONS = {
         "direct_status_searching": "Searching free databases (YTS, Wikipedia, EZTV)...",
         "direct_results_count": "Found **{count}** matching results:",
         "direct_no_results": "No results found for this title. Try a different spelling or keyword.",
+        # YouTube Downloader Feature
+        "yt_title": "📺 YouTube Media Downloader",
+        "yt_subtitle": "Download single YouTube videos or entire playlists in audio (MP3 320k/192k/128k, M4A, WAV) or video (MP4 up to 1080p).",
+        "yt_url_label": "YouTube Video or Playlist URL:",
+        "yt_url_placeholder": "https://www.youtube.com/watch?v=... or https://www.youtube.com/playlist?list=...",
+        "yt_btn_inspect": "🔍 Fetch & Preview",
+        "yt_fetching_info": "Fetching video/playlist metadata from YouTube...",
+        "yt_invalid_url": "Please enter a valid YouTube video or playlist URL.",
+        "yt_error_fetching": "Failed to retrieve information from YouTube: {err}",
+        "yt_playlist_badge": "Playlist ({count} videos)",
+        "yt_video_badge": "Single Video",
+        "yt_uploader": "Channel / Creator:",
+        "yt_duration": "Duration:",
+        "yt_views": "Views:",
+        "yt_playlist_items": "Playlist Tracks & Videos Selection",
+        "yt_select_all": "Select All Videos",
+        "yt_download_options": "⚙️ Download Settings",
+        "yt_media_type": "Desired Media Format:",
+        "yt_type_audio": "🎵 Audio Only (MP3 / M4A / WAV)",
+        "yt_type_video": "🎬 Full Video (MP4)",
+        "yt_audio_format": "Audio Container:",
+        "yt_audio_quality": "Audio Bitrate / Quality:",
+        "yt_video_quality": "Video Resolution:",
+        "yt_btn_start_download": "🚀 Start Download",
+        "yt_downloading": "Downloading and processing media with FFmpeg...",
+        "yt_downloading_item": "Downloading track {cur}/{tot}: {title}",
+        "yt_download_complete": "✅ Download complete! Click below to save to your device:",
+        "yt_btn_save_file": "💾 Save Media File",
+        "yt_btn_save_zip": "📦 Save Playlist ZIP Archive",
     },
     "ar": {
         "page_title": "CineHarvest - مستخرج وسائط وباحث الأفلام",
@@ -150,6 +186,7 @@ TRANSLATIONS = {
         "mode_label": "اختر وضع العمل:",
         "mode_collection": "📂 استخراج مجموعات جوجل (Google Collections)",
         "mode_search": "🔍 البحث المباشر في قواعد البيانات (Direct Search)",
+        "mode_youtube": "📺 تحميل من يوتيوب (فيديو وقوائم تشغيل)",
         "config_header": "⚙️ الإعدادات والخيارات",
         "lang_select": "🌐 اللغة / Language",
         "fetch_enrichment": "📥 جلب الروابط والبوسترات والقصة",
@@ -217,6 +254,35 @@ TRANSLATIONS = {
         "direct_status_searching": "جاري البحث في قواعد البيانات المجانية (YTS, Wikipedia, EZTV)...",
         "direct_results_count": "تم العثور على **{count}** نتيجة مطابقة:",
         "direct_no_results": "لم يتم العثور على نتائج مطابقة لهذا العنوان. جرب كتابة اسم العمل بالإنجليزية.",
+        # YouTube Downloader Feature
+        "yt_title": "📺 أداة تحميل الوسائط من يوتيوب",
+        "yt_subtitle": "تحميل فيديوهات يوتيوب الفردية أو قوائم التشغيل (Playlists) بالكامل بصوت MP3 (حتى 320kbps) أو M4A أو WAV، أو فيديو MP4 بدقة تصل إلى 1080p.",
+        "yt_url_label": "رابط الفيديو أو قائمة التشغيل (Playlist):",
+        "yt_url_placeholder": "https://www.youtube.com/watch?v=... أو https://www.youtube.com/playlist?list=...",
+        "yt_btn_inspect": "🔍 جلب ومعاينة الرابط",
+        "yt_fetching_info": "جاري استخراج بيانات ومعلومات الرابط من يوتيوب...",
+        "yt_invalid_url": "يرجى إدخال رابط يوتيوب صحيح لفيديو أو قائمة تشغيل.",
+        "yt_error_fetching": "تعذر جلب معلومات الرابط من يوتيوب: {err}",
+        "yt_playlist_badge": "قائمة تشغيل ({count} فيديو)",
+        "yt_video_badge": "فيديو فردي",
+        "yt_uploader": "القناة / الناشر:",
+        "yt_duration": "المدة:",
+        "yt_views": "المشاهدات:",
+        "yt_playlist_items": "تحديد عناصر وفيديوهات قائمة التشغيل",
+        "yt_select_all": "تحديد كافة الفيديوهات",
+        "yt_download_options": "⚙️ خيارات وإعدادات التحميل",
+        "yt_media_type": "نوع الوسائط المطلوب:",
+        "yt_type_audio": "🎵 صوت فقط (MP3 / M4A / WAV)",
+        "yt_type_video": "🎬 فيديو كامل (MP4)",
+        "yt_audio_format": "صيغة الصوت:",
+        "yt_audio_quality": "جودة ومعدل البت للصوت (Bitrate):",
+        "yt_video_quality": "دقة وجودة الفيديو:",
+        "yt_btn_start_download": "🚀 بدء التحميل الآن",
+        "yt_downloading": "جاري التحميل والمعالجة وتحويل الصيغ بواسطة FFmpeg...",
+        "yt_downloading_item": "جاري تحميل المقطع {cur}/{tot}: {title}",
+        "yt_download_complete": "✅ اكتمل التحميل والمعالجة بنجاح! اضغط الزر أدناه لحفظ الملف:",
+        "yt_btn_save_file": "💾 حفظ الملف المحمل",
+        "yt_btn_save_zip": "📦 حفظ قائمة التشغيل (ملف ZIP مضغوط)",
     },
 }
 
@@ -233,6 +299,14 @@ if "random_pick" not in st.session_state:
     st.session_state.random_pick = None
 if "direct_search_results" not in st.session_state:
     st.session_state.direct_search_results = None
+if "yt_info" not in st.session_state:
+    st.session_state.yt_info = None
+if "yt_downloaded_data" not in st.session_state:
+    st.session_state.yt_downloaded_data = None
+if "yt_download_filename" not in st.session_state:
+    st.session_state.yt_download_filename = None
+if "yt_is_zip" not in st.session_state:
+    st.session_state.yt_is_zip = False
 
 # --- SIDEBAR CONFIGURATION ---
 st.sidebar.header("🌐 CineHarvest")
@@ -247,12 +321,24 @@ t = TRANSLATIONS[st.session_state.lang]
 # Navigation Mode Selection
 st.sidebar.markdown("---")
 st.sidebar.subheader(t["nav_header"])
+mode_options = [t["mode_collection"], t["mode_search"], t["mode_youtube"]]
+mode_idx = 0
+if st.session_state.app_mode == "search":
+    mode_idx = 1
+elif st.session_state.app_mode == "youtube":
+    mode_idx = 2
+
 mode_selection = st.sidebar.radio(
     t["mode_label"],
-    options=[t["mode_collection"], t["mode_search"]],
-    index=0 if st.session_state.app_mode == "collection" else 1,
+    options=mode_options,
+    index=mode_idx,
 )
-st.session_state.app_mode = "collection" if mode_selection == t["mode_collection"] else "search"
+if mode_selection == t["mode_collection"]:
+    st.session_state.app_mode = "collection"
+elif mode_selection == t["mode_search"]:
+    st.session_state.app_mode = "search"
+else:
+    st.session_state.app_mode = "youtube"
 
 # RTL/LTR Dynamic Responsive Styling
 if st.session_state.lang == "ar":
@@ -442,6 +528,30 @@ def render_download_badges(torrents: List[Dict[str, Any]], google_url: Optional[
                 f'<a href="{tr["url"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#2563eb; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📥 Torrent {q}{size}</a>'
             )
     return "".join(badges)
+
+
+def format_duration(seconds: Optional[int]) -> str:
+    """Format duration in seconds to MM:SS or HH:MM:SS format."""
+    if not seconds:
+        return "--:--"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def format_file_size(size_bytes: Optional[int]) -> str:
+    """Format bytes into readable string (KB, MB, GB)."""
+    if not size_bytes or size_bytes <= 0:
+        return "0 B"
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
 # Export Helpers
@@ -954,3 +1064,224 @@ elif st.session_state.app_mode == "search":
                                 st.caption(t["no_downloads"])
                                 if item.get("url"):
                                     st.link_button(t["view_on_google"], item["url"])
+
+
+# ==============================================================================
+# MODE 3: YOUTUBE MEDIA DOWNLOADER (SINGLE VIDEO & PLAYLIST)
+# ==============================================================================
+elif st.session_state.app_mode == "youtube":
+    st.markdown("---")
+    st.subheader(t["yt_title"])
+    st.caption(t["yt_subtitle"])
+
+    col_yt_input, col_yt_btn = st.columns([4, 1])
+    with col_yt_input:
+        yt_url_input = st.text_input(
+            t["yt_url_label"],
+            value="",
+            placeholder=t["yt_url_placeholder"],
+            key="yt_url_field",
+        )
+    with col_yt_btn:
+        st.write("")
+        st.write("")
+        btn_yt_inspect = st.button(t["yt_btn_inspect"], type="primary", use_container_width=True)
+
+    if btn_yt_inspect and yt_url_input.strip():
+        url_clean = yt_url_input.strip()
+        with st.spinner(t["yt_fetching_info"]):
+            try:
+                info = extract_media_info(url_clean)
+                st.session_state.yt_info = info
+                st.session_state.yt_downloaded_data = None
+                st.session_state.yt_download_filename = None
+            except Exception as e:
+                st.error(t["yt_error_fetching"].format(err=str(e)))
+                st.session_state.yt_info = None
+
+    if st.session_state.get("yt_info"):
+        yt_data = st.session_state.yt_info
+        is_pl = yt_data.get("is_playlist", False)
+
+        st.markdown("---")
+        with st.container(border=True):
+            col_thumb, col_meta = st.columns([1, 2])
+            with col_thumb:
+                if yt_data.get("thumbnail"):
+                    st.image(yt_data["thumbnail"], use_container_width=True)
+                else:
+                    st.markdown(
+                        "<div style='background:#1f2937; height:200px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:40px;'>📺</div>",
+                        unsafe_allow_html=True,
+                    )
+            with col_meta:
+                st.markdown(f"### {yt_data.get('title')}")
+                st.markdown(f"👤 **{t['yt_uploader']}** `{yt_data.get('uploader')}`")
+
+                if is_pl:
+                    count_badge = t["yt_playlist_badge"].format(count=yt_data.get("video_count", 0))
+                    st.markdown(f"📂 **{t['type_label']}:** `{count_badge}`")
+                else:
+                    dur_str = format_duration(yt_data.get("duration"))
+                    st.markdown(f"⏱️ **{t['yt_duration']}** `{dur_str}`")
+                    if yt_data.get("view_count"):
+                        st.markdown(f"👁️ **{t['yt_views']}** `{yt_data.get('view_count'):,}`")
+
+        # If playlist, allow selecting tracks
+        selected_indices = None
+        if is_pl:
+            entries = yt_data.get("entries", [])
+            with st.expander(t["yt_playlist_items"], expanded=True):
+                col_sel_all, _ = st.columns([2, 3])
+                with col_sel_all:
+                    select_all = st.checkbox(t["yt_select_all"], value=True, key="yt_select_all_cb")
+
+                track_options = {
+                    f"{e['index']}. {e['title']} ({format_duration(e.get('duration'))})": e["index"]
+                    for e in entries
+                }
+                default_tracks = list(track_options.keys()) if select_all else []
+                chosen_tracks = st.multiselect(
+                    t["yt_playlist_items"],
+                    options=list(track_options.keys()),
+                    default=default_tracks,
+                    key="yt_chosen_tracks",
+                )
+                selected_indices = [track_options[k] for k in chosen_tracks]
+
+        # Download Settings
+        st.markdown("---")
+        st.subheader(t["yt_download_options"])
+
+        col_opt1, col_opt2, col_opt3 = st.columns(3)
+        with col_opt1:
+            media_type_choice = st.radio(
+                t["yt_media_type"],
+                options=[t["yt_type_audio"], t["yt_type_video"]],
+                index=0,
+                horizontal=True,
+            )
+            is_audio = (media_type_choice == t["yt_type_audio"])
+
+        with col_opt2:
+            if is_audio:
+                audio_fmt = st.selectbox(t["yt_audio_format"], options=["MP3", "M4A", "WAV"], index=0)
+            else:
+                video_fmt = st.selectbox("Video Format:", options=["MP4"], index=0)
+
+        with col_opt3:
+            if is_audio:
+                audio_qual = st.selectbox(
+                    t["yt_audio_quality"],
+                    options=["320 kbps (High Quality)", "192 kbps (Standard)", "128 kbps (Compact)"],
+                    index=0,
+                )
+                bitrate_val = audio_qual.split()[0]
+            else:
+                video_qual = st.selectbox(
+                    t["yt_video_quality"],
+                    options=["1080p (Full HD)", "720p (HD)", "480p (SD)", "360p", "Best Available"],
+                    index=1,
+                )
+                if "1080" in video_qual:
+                    res_val = "1080p"
+                elif "720" in video_qual:
+                    res_val = "720p"
+                elif "480" in video_qual:
+                    res_val = "480p"
+                elif "360" in video_qual:
+                    res_val = "360p"
+                else:
+                    res_val = "best"
+
+        st.write("")
+        btn_start_dl = st.button(t["yt_btn_start_download"], type="primary", use_container_width=True)
+
+        if btn_start_dl:
+            if is_pl and not selected_indices:
+                st.warning("Please select at least one track to download.")
+            else:
+                download_dir = Path("temp_downloads")
+                download_dir.mkdir(exist_ok=True)
+
+                status_placeholder = st.empty()
+                progress_bar = st.progress(0.0)
+
+                def ui_progress_hook(d: Dict[str, Any]):
+                    if d.get("status") == "downloading":
+                        total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                        downloaded = d.get("downloaded_bytes", 0)
+                        speed = d.get("speed")
+                        speed_str = f" • {format_file_size(speed)}/s" if speed else ""
+                        eta = d.get("eta")
+                        eta_str = f" • ETA: {eta}s" if eta else ""
+                        if total_bytes > 0:
+                            ratio = min(1.0, max(0.0, downloaded / total_bytes))
+                            progress_bar.progress(ratio)
+                            status_placeholder.text(f"⏳ {int(ratio*100)}% ({format_file_size(downloaded)} / {format_file_size(total_bytes)}){speed_str}{eta_str}")
+                    elif d.get("status") == "finished":
+                        progress_bar.progress(1.0)
+                        status_placeholder.text("⚙️ Processing media with FFmpeg...")
+
+                with st.spinner(t["yt_downloading"]):
+                    try:
+                        if is_pl:
+                            def on_item(cur: int, tot: int, title: str):
+                                status_placeholder.text(t["yt_downloading_item"].format(cur=cur, tot=tot, title=title[:40]))
+                                progress_bar.progress(min(1.0, cur / tot))
+
+                            zip_file, files = download_playlist_media(
+                                playlist_url=yt_url_input.strip(),
+                                output_dir=download_dir,
+                                media_type="audio" if is_audio else "video",
+                                media_format=audio_fmt.lower() if is_audio else "mp4",
+                                quality=bitrate_val if is_audio else res_val,
+                                selected_indices=selected_indices,
+                                item_callback=on_item,
+                                progress_hook=ui_progress_hook,
+                            )
+                            with open(zip_file, "rb") as f:
+                                st.session_state.yt_downloaded_data = f.read()
+                            st.session_state.yt_download_filename = zip_file.name
+                            st.session_state.yt_is_zip = True
+                        else:
+                            out_file = download_single_video(
+                                url=yt_url_input.strip(),
+                                output_dir=download_dir,
+                                media_type="audio" if is_audio else "video",
+                                media_format=audio_fmt.lower() if is_audio else "mp4",
+                                quality=bitrate_val if is_audio else res_val,
+                                progress_hook=ui_progress_hook,
+                            )
+                            with open(out_file, "rb") as f:
+                                st.session_state.yt_downloaded_data = f.read()
+                            st.session_state.yt_download_filename = out_file.name
+                            st.session_state.yt_is_zip = False
+
+                        status_placeholder.empty()
+                        progress_bar.empty()
+                        st.success(t["yt_download_complete"])
+                    except Exception as err:
+                        st.error(f"Download Error: {err}")
+                        st.session_state.yt_downloaded_data = None
+
+        if st.session_state.get("yt_downloaded_data") is not None:
+            data_bytes = st.session_state.yt_downloaded_data
+            fname = st.session_state.yt_download_filename
+            is_zip_dl = st.session_state.get("yt_is_zip", False)
+            btn_lbl = t["yt_btn_save_zip"] if is_zip_dl else t["yt_btn_save_file"]
+            mime_type = "application/zip" if is_zip_dl else ("audio/mpeg" if fname.endswith(".mp3") else ("audio/wav" if fname.endswith(".wav") else "video/mp4"))
+
+            col_dl_btn, col_dl_info = st.columns([2, 2])
+            with col_dl_btn:
+                st.download_button(
+                    label=f"{btn_lbl} ({format_file_size(len(data_bytes))})",
+                    data=data_bytes,
+                    file_name=fname,
+                    mime=mime_type,
+                    type="primary",
+                    use_container_width=True,
+                )
+            with col_dl_info:
+                st.info(f"📄 **{fname}** ({format_file_size(len(data_bytes))})")
+
