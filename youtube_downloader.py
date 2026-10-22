@@ -61,16 +61,30 @@ YOUTUBE_CLIENT_STRATEGIES = [
 ]
 
 
+def cleanup_download_dir(directory: Path) -> None:
+    """Remove old files and subdirectories inside the temporary download folder to prevent disk leaks."""
+    if not directory.exists():
+        return
+    for child in directory.iterdir():
+        try:
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def resolve_cookiefile(
     cookiefile: Optional[str] = None,
     cookies_content: Optional[str] = None,
 ) -> Optional[str]:
     """Resolve cookie file path from argument, content string, env vars, or standard locations."""
+    temp_cookie_path = Path(tempfile.gettempdir()) / f"cineharvest_cookies_{os.getpid()}.txt"
+
     if cookies_content and cookies_content.strip():
-        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix="_cookies.txt", encoding="utf-8")
-        tmp.write(cookies_content.strip())
-        tmp.close()
-        return tmp.name
+        temp_cookie_path.write_text(cookies_content.strip(), encoding="utf-8")
+        return str(temp_cookie_path)
 
     if cookiefile and os.path.exists(cookiefile):
         return cookiefile
@@ -78,10 +92,8 @@ def resolve_cookiefile(
     # Check environment variables
     env_cookies = os.getenv("YOUTUBE_COOKIES")
     if env_cookies and env_cookies.strip():
-        tmp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix="_cookies.txt", encoding="utf-8")
-        tmp.write(env_cookies.strip())
-        tmp.close()
-        return tmp.name
+        temp_cookie_path.write_text(env_cookies.strip(), encoding="utf-8")
+        return str(temp_cookie_path)
 
     env_path = os.getenv("YOUTUBE_COOKIEFILE")
     if env_path and os.path.exists(env_path):

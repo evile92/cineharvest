@@ -4,6 +4,7 @@ Enriches extracted titles with release year, vote average, poster image URL,
 genres, and overview for export to Letterboxd and comprehensive datasets.
 """
 
+import concurrent.futures
 import json
 import logging
 import urllib.parse
@@ -60,35 +61,54 @@ def fetch_tmdb_details(title: str, api_key: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _enrich_single_tmdb(item: Dict[str, Any], api_key: str) -> Dict[str, Any]:
+    """Helper to enrich a single item with TMDB metadata."""
+    title = item.get("title", "")
+    metadata = fetch_tmdb_details(title, api_key)
+    updated = dict(item)
+    if metadata:
+        if metadata.get("year"):
+            updated["year"] = metadata["year"]
+        if metadata.get("rating"):
+            updated["rating"] = metadata["rating"]
+        if metadata.get("poster_url"):
+            updated["poster_url"] = metadata["poster_url"]
+        if metadata.get("type") and not updated.get("type"):
+            updated["type"] = metadata["type"]
+        if metadata.get("overview"):
+            updated["overview"] = metadata["overview"]
+    return updated
+
+
 def enrich_items_with_tmdb(
     items: List[Dict[str, Any]],
     api_key: str,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    max_workers: int = 8,
 ) -> List[Dict[str, Any]]:
-    """Enrich a list of extracted titles with TMDB metadata."""
-    enriched = []
+    """Enrich a list of extracted titles concurrently with TMDB metadata."""
     total = len(items)
+    if not total or not api_key:
+        return items
 
-    for idx, item in enumerate(items, 1):
-        title = item.get("title", "")
-        metadata = fetch_tmdb_details(title, api_key)
+    enriched_list: List[Optional[Dict[str, Any]]] = [None] * total
+    completed = 0
 
-        updated = dict(item)
-        if metadata:
-            if metadata.get("year"):
-                updated["year"] = metadata["year"]
-            if metadata.get("rating"):
-                updated["rating"] = metadata["rating"]
-            if metadata.get("poster_url"):
-                updated["poster_url"] = metadata["poster_url"]
-            if metadata.get("type") and not updated.get("type"):
-                updated["type"] = metadata["type"]
-            if metadata.get("overview"):
-                updated["overview"] = metadata["overview"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(_enrich_single_tmdb, item, api_key): idx
+            for idx, item in enumerate(items)
+        }
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                enriched_list[idx] = future.result()
+            except Exception as e:
+                logger.debug("TMDB enrichment error on item %d: %s", idx, e)
+                enriched_list[idx] = items[idx]
 
-        enriched.append(updated)
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
 
-        if progress_callback:
-            progress_callback(idx, total)
-
-    return enriched
+    return [item for item in enriched_list if item is not None]

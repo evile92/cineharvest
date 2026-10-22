@@ -183,8 +183,68 @@ def fetch_yts_movie_data(title: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def fetch_eztv_torrents(imdb_id: str) -> List[Dict[str, Any]]:
-    """Fetch TV series torrents from EZTV API using clean numeric IMDb ID."""
+def _format_bytes(size_val: Any) -> str:
+    """Convert numeric byte size to human-readable MB/GB."""
+    try:
+        b = int(size_val)
+        if b <= 0:
+            return ""
+        if b >= 1024 * 1024 * 1024:
+            return f"{b / (1024 ** 3):.2f} GB"
+        return f"{b / (1024 ** 2):.0f} MB"
+    except Exception:
+        return str(size_val) if size_val else ""
+
+
+def fetch_imdb_metadata(title: str, expected_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Query IMDb's public suggestion endpoint for IMDb ID, release year, high-res poster, and media type."""
+    clean = re.sub(r"[^\w\s]", " ", title).strip().lower()
+    if not clean:
+        return None
+    first_char = clean[0] if clean[0].isalnum() else "x"
+    url = f"https://v3.sg.media-imdb.com/suggestion/{first_char}/{urllib.parse.quote(clean)}.json"
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            items = [d for d in data.get("d", []) if str(d.get("id", "")).startswith("tt")]
+            if not items:
+                return None
+
+            best_item = None
+            best_score = -1.0
+            target_lower = title.strip().lower()
+
+            for d in items:
+                cand_title = str(d.get("l", "")).strip().lower()
+                qid = str(d.get("qid", "")).lower()
+                cand_type = "tv" if ("series" in qid or "tvmini" in qid or "tvshow" in qid) else ("movie" if "movie" in qid or "film" in qid else None)
+
+                score = difflib.SequenceMatcher(None, target_lower, cand_title).ratio()
+                if expected_type and cand_type == expected_type:
+                    score += 0.15
+
+                if score > best_score:
+                    best_score = score
+                    best_item = (d, cand_type)
+
+            if not best_item or best_score < 0.65:
+                return None
+
+            d, detected_type = best_item
+            poster = d.get("i", {}).get("imageUrl") if isinstance(d.get("i"), dict) else None
+            return {
+                "imdb_code": d.get("id"),
+                "year": str(d["y"]) if d.get("y") else None,
+                "poster_url": poster,
+                "type": detected_type,
+            }
+    except Exception:
+        return None
+
+
+def fetch_eztv_torrents(imdb_id: str, series_title: str = "") -> List[Dict[str, Any]]:
+    """Fetch TV series torrents from EZTV API using clean numeric IMDb ID and verify title match."""
     clean_id = re.sub(r"[^\d]", "", imdb_id)
     if not clean_id:
         return []
@@ -196,12 +256,26 @@ def fetch_eztv_torrents(imdb_id: str) -> List[Dict[str, Any]]:
             data = json.loads(resp.read().decode("utf-8"))
             torrents = data.get("torrents", [])
             results = []
+            title_prefix = re.sub(r"[^\w\s]", "", series_title).strip().lower().split()[:2] if series_title else []
+
             for t in torrents:
+                t_title = t.get("title", "")
+                if title_prefix:
+                    t_clean = re.sub(r"[^\w\s]", "", t_title).lower()
+                    if not all(w in t_clean for w in title_prefix):
+                        continue
+
+                res_match = re.search(r"\b(2160p|1080p|720p|480p)\b", t_title, re.I)
+                res_str = res_match.group(1) if res_match else "HD"
+                ep_match = re.search(r"\b(S\d{1,2}E\d{1,2}|S\d{1,2})\b", t_title, re.I)
+                ep_str = f"{ep_match.group(1).upper()} " if ep_match else ""
+
                 results.append({
-                    "title": t.get("title", ""),
+                    "title": t_title,
+                    "quality": f"{ep_str}{res_str}".strip(),
                     "season": t.get("season"),
                     "episode": t.get("episode"),
-                    "size": t.get("size_bytes"),
+                    "size": _format_bytes(t.get("size_bytes")),
                     "url": t.get("torrent_url"),
                     "magnet": t.get("magnet_url"),
                 })
@@ -412,9 +486,22 @@ def enrich_single_item(item: Dict[str, Any]) -> Dict[str, Any]:
             if yts_data.get("imdb_code"):
                 enriched["imdb_code"] = yts_data["imdb_code"]
 
-    # 3. Check EZTV if imdb_code is available and item is a TV show
+    # 3. Resolve IMDb metadata if missing imdb_code, year, poster, or if TV series
+    if final_type == "tv" or not enriched.get("imdb_code") or not enriched.get("year") or not enriched.get("poster_url"):
+        imdb_meta = fetch_imdb_metadata(title, expected_type=final_type)
+        if imdb_meta:
+            if not final_type and imdb_meta.get("type"):
+                final_type = imdb_meta["type"]
+            if not enriched.get("imdb_code") and imdb_meta.get("imdb_code"):
+                enriched["imdb_code"] = imdb_meta["imdb_code"]
+            if not enriched.get("year") and imdb_meta.get("year"):
+                enriched["year"] = imdb_meta["year"]
+            if not enriched.get("poster_url") and imdb_meta.get("poster_url"):
+                enriched["poster_url"] = imdb_meta["poster_url"]
+
+    # 4. Check EZTV if imdb_code is available and item is a TV show
     if enriched.get("imdb_code") and final_type == "tv":
-        eztv_torrents = fetch_eztv_torrents(enriched["imdb_code"])
+        eztv_torrents = fetch_eztv_torrents(enriched["imdb_code"], series_title=title)
         if eztv_torrents:
             enriched["torrents"] = eztv_torrents
 
@@ -590,8 +677,8 @@ def search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Di
     except Exception as e:
         logger.debug("Wikipedia search error: %s", e)
 
-    # 3. Concurrently enrich Arabic synopses for all results
-    def enrich_arabic(res: Dict[str, Any]):
+    # 3. Concurrently enrich Arabic synopses, IMDb metadata, and TV torrents for all results
+    def enrich_result_extra(res: Dict[str, Any]):
         try:
             ar_sum = fetch_arabic_wikipedia_summary(res["title"], media_type=res.get("type"))
             if ar_sum:
@@ -599,8 +686,26 @@ def search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Di
         except Exception:
             pass
 
+        try:
+            if res.get("type") == "tv" or not res.get("imdb_code") or not res.get("year") or not res.get("poster_url"):
+                imdb_meta = fetch_imdb_metadata(res["title"], expected_type=res.get("type"))
+                if imdb_meta:
+                    if not res.get("imdb_code") and imdb_meta.get("imdb_code"):
+                        res["imdb_code"] = imdb_meta["imdb_code"]
+                    if not res.get("year") and imdb_meta.get("year"):
+                        res["year"] = imdb_meta["year"]
+                    if imdb_meta.get("poster_url") and (not res.get("poster_url") or "wikipedia" in str(res.get("poster_url"))):
+                        res["poster_url"] = imdb_meta["poster_url"]
+
+            if res.get("type") == "tv" and res.get("imdb_code") and not res.get("torrents"):
+                eztv_list = fetch_eztv_torrents(res["imdb_code"], series_title=res["title"])
+                if eztv_list:
+                    res["torrents"] = eztv_list
+        except Exception:
+            pass
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        list(executor.map(enrich_arabic, results))
+        list(executor.map(enrich_result_extra, results))
 
     # 4. TMDB Enrichment if key provided
     if tmdb_key:

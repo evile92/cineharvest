@@ -77,6 +77,7 @@ except Exception as _pe_err:
         """Fallback ExtractionError when extractor cannot be imported."""
         pass
 
+import urllib.parse
 from media_enricher import enrich_media_items, search_media_database
 from cleaner import generate_markdown, GENRE_ICONS, GENRE_ARABIC
 from tmdb import enrich_items_with_tmdb
@@ -85,6 +86,7 @@ from youtube_downloader import (
     download_single_video,
     download_playlist_media,
     is_playlist_url,
+    cleanup_download_dir,
 )
 
 # --- BILINGUAL TRANSLATIONS ---
@@ -503,24 +505,33 @@ else:
         unsafe_allow_html=True,
     )
 
-st.sidebar.markdown("---")
-st.sidebar.header(t["config_header"])
+enrich_media = True
+tmdb_api_key = ""
+max_scrolls = MAX_SCROLLS
+scroll_delay = SCROLL_DELAY
 
-enrich_media = st.sidebar.checkbox(
-    t["fetch_enrichment"],
-    value=True,
-    help=t["fetch_enrichment_help"],
-)
-tmdb_api_key = st.sidebar.text_input(
-    t["tmdb_label"],
-    value="",
-    type="password",
-    help=t["tmdb_help"],
-)
+if st.session_state.app_mode in ("collection", "search"):
+    st.sidebar.markdown("---")
+    st.sidebar.header(t["config_header"])
 
-with st.sidebar.expander(t["advanced_settings"]):
-    max_scrolls = st.slider(t["max_scrolls"], min_value=5, max_value=200, value=MAX_SCROLLS, step=5)
-    scroll_delay = st.slider(t["scroll_delay"], min_value=0.5, max_value=4.0, value=SCROLL_DELAY, step=0.25)
+    if st.session_state.app_mode == "collection":
+        enrich_media = st.sidebar.checkbox(
+            t["fetch_enrichment"],
+            value=True,
+            help=t["fetch_enrichment_help"],
+        )
+
+    tmdb_api_key = st.sidebar.text_input(
+        t["tmdb_label"],
+        value="",
+        type="password",
+        help=t["tmdb_help"],
+    )
+
+    if st.session_state.app_mode == "collection":
+        with st.sidebar.expander(t["advanced_settings"]):
+            max_scrolls = st.slider(t["max_scrolls"], min_value=5, max_value=200, value=MAX_SCROLLS, step=5)
+            scroll_delay = st.slider(t["scroll_delay"], min_value=0.5, max_value=4.0, value=SCROLL_DELAY, step=0.25)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(
@@ -533,6 +544,12 @@ st.title(t["app_title"])
 st.markdown(t["app_subtitle"])
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Cached wrapper around search_media_database to avoid redundant API calls."""
+    return search_media_database(query, tmdb_key=tmdb_key)
+
+
 # Helper to get synopsis in the user's selected language
 def get_synopsis_text(item: Dict[str, Any], lang: str) -> Optional[str]:
     if lang == "ar":
@@ -540,12 +557,24 @@ def get_synopsis_text(item: Dict[str, Any], lang: str) -> Optional[str]:
     return item.get("synopsis") or item.get("synopsis_ar")
 
 
-# Helper to render styled HTML badges for magnet/torrent buttons
-def render_download_badges(torrents: List[Dict[str, Any]], google_url: Optional[str] = None) -> str:
+# Helper to render styled HTML badges for magnet/torrent buttons + YouTube Trailer
+def render_download_badges(
+    torrents: List[Dict[str, Any]],
+    google_url: Optional[str] = None,
+    title: Optional[str] = None,
+    year: Optional[str] = None,
+) -> str:
     badges = []
     if google_url:
         badges.append(
             f'<a href="{google_url}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#4b5563; color:white; border-radius:5px; text-decoration:none; font-size:12px;">🔗 Link</a>'
+        )
+    if title:
+        q_trailer = urllib.parse.quote(f"{title} {year or ''} official trailer".strip())
+        yt_trailer_url = f"https://www.youtube.com/results?search_query={q_trailer}"
+        trailer_lbl = "▶️ إعلان" if st.session_state.lang == "ar" else "▶️ Trailer"
+        badges.append(
+            f'<a href="{yt_trailer_url}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#dc2626; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">{trailer_lbl}</a>'
         )
     for tr in torrents[:3]:
         q = tr.get("quality", "HD")
@@ -559,6 +588,101 @@ def render_download_badges(torrents: List[Dict[str, Any]], google_url: Optional[
                 f'<a href="{tr["url"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#2563eb; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📥 Torrent {q}{size}</a>'
             )
     return "".join(badges)
+
+
+def render_media_card(item: Dict[str, Any], clamp_synopsis: bool = True) -> None:
+    """Render a standardized movie/series card with uniform poster height and metadata."""
+    with st.container(border=True):
+        poster = item.get("poster_url")
+        if poster:
+            st.markdown(
+                f'<img src="{poster}" style="width:100%; height:310px; object-fit:cover; border-radius:8px; margin-bottom:8px;" loading="lazy" />',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div style='background:#1f2937; height:310px; border-radius:8px; margin-bottom:8px; display:flex; align-items:center; justify-content:center; font-size:42px;'>🎬</div>",
+                unsafe_allow_html=True,
+            )
+
+        title_str = item.get("title", "")
+        year_str = f" ({item['year']})" if item.get("year") else ""
+        rating_str = f"⭐ {item['rating']}" if item.get("rating") else ""
+        st.markdown(
+            f"<div style='font-weight:700; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;' title='{title_str}{year_str}'>{title_str}{year_str}</div>",
+            unsafe_allow_html=True,
+        )
+
+        c_type = item.get("type")
+        badge_text = t.get(c_type, c_type.upper() if c_type else "")
+        p_genre = item.get("primary_genre") or (item.get("genres", [None])[0] if item.get("genres") else None)
+        genre_badge = f" • {GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre else ""
+        st.caption(f"`{badge_text}`{genre_badge} {rating_str}")
+
+        syn_text = get_synopsis_text(item, st.session_state.lang) or ""
+        if clamp_synopsis:
+            st.markdown(
+                f"<div style='font-size:13px; line-height:1.45; min-height:56px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:8px;' title='{syn_text}'>{syn_text}</div>",
+                unsafe_allow_html=True,
+            )
+        elif syn_text:
+            st.markdown(f"<p style='font-size:13px; line-height:1.45;'>{syn_text}</p>", unsafe_allow_html=True)
+
+        it_torrents = item.get("torrents", [])
+        badges_html = render_download_badges(it_torrents, item.get("url"), title=title_str, year=item.get("year"))
+        if badges_html:
+            st.markdown(badges_html, unsafe_allow_html=True)
+
+
+def render_export_buttons(items: List[Dict[str, Any]], file_prefix: str = "collection", collection_title: str = "Collection Watchlist") -> None:
+    """Render standardized 5-column export buttons for TXT, JSON, CSV, Letterboxd, and Markdown."""
+    st.subheader(t["export_header"])
+    d1, d2, d3, d4, d5 = st.columns(5)
+    with d1:
+        st.download_button(
+            label=t["btn_txt"],
+            data=generate_txt(items),
+            file_name=f"{file_prefix}_titles.txt",
+            mime="text/plain",
+            use_container_width=True,
+            key=f"dl_txt_{file_prefix}",
+        )
+    with d2:
+        st.download_button(
+            label=t["btn_json"],
+            data=generate_json(items),
+            file_name=f"{file_prefix}_data.json",
+            mime="application/json",
+            use_container_width=True,
+            key=f"dl_json_{file_prefix}",
+        )
+    with d3:
+        st.download_button(
+            label=t["btn_csv"],
+            data=generate_csv(items, st.session_state.lang).encode("utf-8-sig"),
+            file_name=f"{file_prefix}_data.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key=f"dl_csv_{file_prefix}",
+        )
+    with d4:
+        st.download_button(
+            label=t["btn_letterboxd"],
+            data=generate_letterboxd_csv(items).encode("utf-8-sig"),
+            file_name=f"{file_prefix}_letterboxd.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key=f"dl_lb_{file_prefix}",
+        )
+    with d5:
+        st.download_button(
+            label=t["btn_md"],
+            data=generate_markdown(items, collection_title=collection_title, lang=st.session_state.lang),
+            file_name=f"{file_prefix}_watchlist.md",
+            mime="text/markdown",
+            use_container_width=True,
+            key=f"dl_md_{file_prefix}",
+        )
 
 
 def format_duration(seconds: Optional[int]) -> str:
@@ -812,59 +936,20 @@ if st.session_state.app_mode == "collection":
 
                         st.markdown(f"**{t['download_links']}**")
                         torrents = rand_item.get("torrents", [])
-                        if torrents:
-                            badges_html = render_download_badges(torrents, rand_item.get("url"))
+                        badges_html = render_download_badges(
+                            torrents,
+                            rand_item.get("url"),
+                            title=rand_item.get("title"),
+                            year=rand_item.get("year"),
+                        )
+                        if badges_html:
                             st.markdown(badges_html, unsafe_allow_html=True)
                         else:
                             st.caption(t["no_downloads"])
-                            if rand_item.get("url"):
-                                st.link_button(t["view_on_google"], rand_item["url"])
 
         # Export & Downloads
         st.markdown("---")
-        st.subheader(t["export_header"])
-        d1, d2, d3, d4, d5 = st.columns(5)
-
-        with d1:
-            st.download_button(
-                label=t["btn_txt"],
-                data=generate_txt(items),
-                file_name="collection_titles.txt",
-                mime="text/plain",
-                use_container_width=True,
-            )
-        with d2:
-            st.download_button(
-                label=t["btn_json"],
-                data=generate_json(items),
-                file_name="collection_data.json",
-                mime="application/json",
-                use_container_width=True,
-            )
-        with d3:
-            st.download_button(
-                label=t["btn_csv"],
-                data=generate_csv(items, st.session_state.lang).encode("utf-8-sig"),
-                file_name="collection_data.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        with d4:
-            st.download_button(
-                label=t["btn_letterboxd"],
-                data=generate_letterboxd_csv(items).encode("utf-8-sig"),
-                file_name="letterboxd_watchlist.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        with d5:
-            st.download_button(
-                label=t["btn_md"],
-                data=generate_markdown(items, lang=st.session_state.lang),
-                file_name="collection_watchlist.md",
-                mime="text/markdown",
-                use_container_width=True,
-            )
+        render_export_buttons(items, file_prefix="collection", collection_title="Collection Watchlist")
 
         # Previews
         st.markdown("---")
@@ -925,35 +1010,7 @@ if st.session_state.app_mode == "collection":
                     cols = st.columns(num_cols)
                     for col_idx, it in enumerate(chunk):
                         with cols[col_idx]:
-                            with st.container(border=True):
-                                if it.get("poster_url"):
-                                    st.image(it["poster_url"], use_container_width=True)
-                                else:
-                                    st.markdown(
-                                        "<div style='background:#1f2937; height:200px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:36px;'>🎬</div>",
-                                        unsafe_allow_html=True,
-                                    )
-
-                                title_str = it.get("title", "")
-                                year_str = f" ({it['year']})" if it.get("year") else ""
-                                rating_str = f"⭐ {it['rating']}" if it.get("rating") else ""
-                                st.markdown(f"**{title_str}** {year_str}")
-
-                                c_type = it.get("type")
-                                badge_text = t.get(c_type, c_type.upper() if c_type else "")
-                                p_genre = it.get("primary_genre") or (it.get("genres", [None])[0] if it.get("genres") else None)
-                                genre_badge = f" • {GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre else ""
-                                st.caption(f"`{badge_text}`{genre_badge} {rating_str}")
-
-                                syn_text = get_synopsis_text(it, st.session_state.lang)
-                                if syn_text:
-                                    short_syn = syn_text[:120] + ("..." if len(syn_text) > 120 else "")
-                                    st.markdown(f"<small>{short_syn}</small>", unsafe_allow_html=True)
-
-                                it_torrents = it.get("torrents", [])
-                                badges_html = render_download_badges(it_torrents, it.get("url"))
-                                if badges_html:
-                                    st.markdown(badges_html, unsafe_allow_html=True)
+                            render_media_card(it, clamp_synopsis=True)
 
         with tab_table:
             table_rows = []
@@ -1001,7 +1058,7 @@ elif st.session_state.app_mode == "search":
 
     if do_search and direct_query.strip():
         with st.spinner(t["direct_status_searching"]):
-            search_res = search_media_database(direct_query.strip(), tmdb_key=tmdb_api_key)
+            search_res = cached_search_media_database(direct_query.strip(), tmdb_key=tmdb_api_key or None)
             st.session_state.direct_search_results = search_res
 
     if st.session_state.direct_search_results is not None:
@@ -1013,48 +1070,7 @@ elif st.session_state.app_mode == "search":
             st.markdown(t["direct_results_count"].format(count=len(results)))
 
             # Export row for search results
-            st.subheader(t["export_header"])
-            sd1, sd2, sd3, sd4, sd5 = st.columns(5)
-            with sd1:
-                st.download_button(
-                    label=t["btn_txt"],
-                    data=generate_txt(results),
-                    file_name="search_results.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-            with sd2:
-                st.download_button(
-                    label=t["btn_json"],
-                    data=generate_json(results),
-                    file_name="search_results.json",
-                    mime="application/json",
-                    use_container_width=True,
-                )
-            with sd3:
-                st.download_button(
-                    label=t["btn_csv"],
-                    data=generate_csv(results, st.session_state.lang).encode("utf-8-sig"),
-                    file_name="search_results.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-            with sd4:
-                st.download_button(
-                    label=t["btn_letterboxd"],
-                    data=generate_letterboxd_csv(results).encode("utf-8-sig"),
-                    file_name="search_results_letterboxd.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-            with sd5:
-                st.download_button(
-                    label=t["btn_md"],
-                    data=generate_markdown(results, collection_title="Search Results", lang=st.session_state.lang),
-                    file_name="search_results.md",
-                    mime="text/markdown",
-                    use_container_width=True,
-                )
+            render_export_buttons(results, file_prefix="search_results", collection_title="Search Results")
 
             # Display Search Results in 3-column cards
             st.markdown("---")
@@ -1064,39 +1080,7 @@ elif st.session_state.app_mode == "search":
                 cols = st.columns(num_cols)
                 for col_idx, item in enumerate(chunk):
                     with cols[col_idx]:
-                        with st.container(border=True):
-                            if item.get("poster_url"):
-                                st.image(item["poster_url"], use_container_width=True)
-                            else:
-                                st.markdown(
-                                    "<div style='background:#1f2937; height:220px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:40px;'>🎬</div>",
-                                    unsafe_allow_html=True,
-                                )
-
-                            title_str = item.get("title", "")
-                            year_str = f" ({item['year']})" if item.get("year") else ""
-                            rating_str = f"⭐ {item['rating']}" if item.get("rating") else ""
-                            st.markdown(f"### {title_str} {year_str}")
-
-                            c_type = item.get("type")
-                            badge_text = t.get(c_type, c_type.upper() if c_type else "")
-                            p_genre = item.get("primary_genre") or (item.get("genres", [None])[0] if item.get("genres") else None)
-                            genre_badge = f" • {GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre else ""
-                            st.caption(f"`{badge_text}`{genre_badge} {rating_str}")
-
-                            syn_text = get_synopsis_text(item, st.session_state.lang)
-                            if syn_text:
-                                st.markdown(f"<p style='font-size:13px; line-height:1.4;'>{syn_text}</p>", unsafe_allow_html=True)
-
-                            it_torrents = item.get("torrents", [])
-                            if it_torrents:
-                                st.markdown(f"**{t['download_links']}**")
-                                badges_html = render_download_badges(it_torrents, item.get("url"))
-                                st.markdown(badges_html, unsafe_allow_html=True)
-                            else:
-                                st.caption(t["no_downloads"])
-                                if item.get("url"):
-                                    st.link_button(t["view_on_google"], item["url"])
+                        render_media_card(item, clamp_synopsis=True)
 
 
 # ==============================================================================
@@ -1275,6 +1259,7 @@ elif st.session_state.app_mode == "youtube":
             else:
                 download_dir = Path("temp_downloads")
                 download_dir.mkdir(exist_ok=True)
+                cleanup_download_dir(download_dir)
 
                 status_placeholder = st.empty()
                 progress_bar = st.progress(0.0)
@@ -1338,6 +1323,8 @@ elif st.session_state.app_mode == "youtube":
                     except Exception as err:
                         st.error(f"Download Error: {err}")
                         st.session_state.yt_downloaded_data = None
+                    finally:
+                        cleanup_download_dir(download_dir)
 
         if st.session_state.get("yt_downloaded_data") is not None:
             data_bytes = st.session_state.yt_downloaded_data
