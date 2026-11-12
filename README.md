@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="assets/logo.png" alt="CineHarvest - Google Collection Media Extractor" width="540">
+</div>
+
 # Google Collection Media Extractor (CineHarvest)
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://cineharvest.streamlit.app)

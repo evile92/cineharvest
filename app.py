@@ -8,6 +8,7 @@ A bilingual (Arabic/English) web application for:
 """
 
 import io
+import base64
 import csv
 import json
 import os
@@ -341,8 +342,25 @@ if "yt_download_filename" not in st.session_state:
 if "yt_is_zip" not in st.session_state:
     st.session_state.yt_is_zip = False
 
+@st.cache_data(show_spinner=False)
+def get_logo_base64() -> Optional[str]:
+    """Load the CineHarvest brand logo as a base64 string if present."""
+    logo_path = Path(__file__).parent / "assets" / "logo.png"
+    if not logo_path.exists():
+        return None
+    return base64.b64encode(logo_path.read_bytes()).decode("ascii")
+
+
+logo_b64 = get_logo_base64()
+
 # --- SIDEBAR CONFIGURATION ---
-st.sidebar.header("🌐 CineHarvest")
+if logo_b64:
+    st.sidebar.markdown(
+        f'<div style="margin-bottom: 0.75rem;"><img src="data:image/png;base64,{logo_b64}" alt="CineHarvest Logo" style="width: 100%; height: auto; display: block;" /></div>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.sidebar.header("🌐 CineHarvest")
 selected_lang_name = st.sidebar.selectbox(
     "Language / اللغة",
     options=["English", "العربية"],
@@ -540,7 +558,13 @@ st.sidebar.markdown(
 )
 
 # --- APP HEADER ---
-st.title(t["app_title"])
+if logo_b64:
+    st.markdown(
+        f'<div style="margin-bottom: 0.75rem;"><img src="data:image/png;base64,{logo_b64}" alt="CineHarvest - Google Collection Media Extractor" style="max-width: 460px; width: 100%; height: auto; display: inline-block;" /></div>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.title(t["app_title"])
 st.markdown(t["app_subtitle"])
 
 
