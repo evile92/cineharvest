@@ -243,6 +243,7 @@ def main() -> int:
         pw, browser, context, page = launch_browser(
             headless=headless_mode,
             session_path=session_file,
+            block_assets=not args.debug,
         )
 
         # Setup wire-level network interception to harvest items streaming from Google
@@ -253,22 +254,20 @@ def main() -> int:
         log_and_record(f"Opening URL: {args.url}")
         open_collection(page, args.url)
 
-        print("[+] Loading JavaScript...")
-        log_and_record("Waiting for dynamic content to hydrate")
-        time.sleep(2)
-
-        print("[+] Scanning collection...")
         print("[+] Scanning collection & handling multi-page navigation...")
         log_and_record("Starting infinite scroll with multi-page pagination detection")
 
-        discovered_counts = []
+        page_peaks: Dict[int, int] = {}
+        active_page_holder = [1]
 
         def on_item_discovered(count: int):
-            discovered_counts.append(count)
-            print(f"[+] Items discovered on current page: {count}")
-            log_and_record(f"Items discovered: {count}")
+            p = active_page_holder[0]
+            page_peaks[p] = max(page_peaks.get(p, 0), count)
+            print(f"[+] Items discovered on page {p}: {count}")
+            log_and_record(f"Items discovered on page {p}: {count}")
 
         def on_page_change(page_num: int, count_so_far: int):
+            active_page_holder[0] = page_num
             print(f"[+] Processing page {page_num}... ({count_so_far} items collected)")
             log_and_record(f"Processing page {page_num} ({count_so_far} items collected)")
 
@@ -297,7 +296,7 @@ def main() -> int:
             unique_items = enrich_items_with_tmdb(unique_items, args.tmdb_key)
 
         # Metrics calculation
-        total_discovered = discovered_counts[-1] if discovered_counts else len(unique_items)
+        total_discovered = max(len(unique_items), sum(page_peaks.values()) if page_peaks else len(unique_items))
         unique_count = len(unique_items)
         duplicates_count = max(0, total_discovered - unique_count)
 

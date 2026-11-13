@@ -7,15 +7,15 @@ A bilingual (Arabic/English) web application for:
 4. Interactive random watch recommendations.
 """
 
-import io
 import base64
-import csv
-import json
+import html
 import os
 import random
+import shutil
 import sys
 import subprocess
-import time
+import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
@@ -32,7 +32,7 @@ st.set_page_config(
 
 @st.cache_resource
 def ensure_playwright_browsers() -> None:
-    """Ensure Chromium browser binary is installed in Linux/Cloud container."""
+    """Lazy-install Chromium binary only when Google Collection extraction is triggered."""
     try:
         subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
@@ -43,8 +43,6 @@ def ensure_playwright_browsers() -> None:
     except Exception:
         pass
 
-
-ensure_playwright_browsers()
 
 from config import (
     DEFAULT_COLLECTION_URL,
@@ -78,16 +76,23 @@ except Exception as _pe_err:
         """Fallback ExtractionError when extractor cannot be imported."""
         pass
 
-import urllib.parse
 from media_enricher import enrich_media_items, search_media_database
-from cleaner import generate_markdown, GENRE_ICONS, GENRE_ARABIC
+from cleaner import (
+    generate_txt,
+    generate_json,
+    generate_csv,
+    generate_letterboxd_csv,
+    generate_markdown,
+    GENRE_ICONS,
+    GENRE_ARABIC,
+)
 from tmdb import enrich_items_with_tmdb
 from youtube_downloader import (
     extract_media_info,
     download_single_video,
     download_playlist_media,
-    is_playlist_url,
-    cleanup_download_dir,
+    is_valid_youtube_url,
+    has_video_and_playlist,
 )
 
 # --- BILINGUAL TRANSLATIONS ---
@@ -204,6 +209,13 @@ TRANSLATIONS = {
         "yt_cookies_paste": "Or paste cookies.txt content:",
         "yt_cookies_active": "✅ Active cookies loaded for this session ({count} bytes).",
         "yt_cookies_clear": "Clear Cookies",
+        "yt_scope_label": "Link includes both a video & playlist:",
+        "yt_scope_single": "Single Video Only",
+        "yt_scope_playlist": "Entire Playlist",
+        "yt_embed_subs": "Embed Soft Subtitles (AR / EN)",
+        "card_page_label": "Page {cur} of {tot} ({count} items)",
+        "card_prev": "◀ Previous",
+        "card_next": "Next ▶",
     },
     "ar": {
         "page_title": "CineHarvest - مستخرج وسائط وباحث الأفلام",
@@ -317,6 +329,13 @@ TRANSLATIONS = {
         "yt_cookies_paste": "أو الصق محتوى cookies.txt هنا:",
         "yt_cookies_active": "✅ تم تفعيل الكوكيز بنجاح لهذه الجلسة ({count} بايت).",
         "yt_cookies_clear": "حذف الكوكيز",
+        "yt_scope_label": "الرابط يحتوي على فيديو وقائمة تشغيل معاً:",
+        "yt_scope_single": "هذا الفيديو فقط",
+        "yt_scope_playlist": "قائمة التشغيل كاملة",
+        "yt_embed_subs": "دمج ملفات الترجمة مع الفيديو (AR / EN)",
+        "card_page_label": "صفحة {cur} من {tot} ({count} عنصراً)",
+        "card_prev": "◀ السابق",
+        "card_next": "التالي ▶",
     },
 }
 
@@ -335,12 +354,18 @@ if "direct_search_results" not in st.session_state:
     st.session_state.direct_search_results = None
 if "yt_info" not in st.session_state:
     st.session_state.yt_info = None
-if "yt_downloaded_data" not in st.session_state:
-    st.session_state.yt_downloaded_data = None
+if "yt_job_dir" not in st.session_state:
+    st.session_state.yt_job_dir = None
+if "yt_download_path" not in st.session_state:
+    st.session_state.yt_download_path = None
 if "yt_download_filename" not in st.session_state:
     st.session_state.yt_download_filename = None
+if "yt_download_size" not in st.session_state:
+    st.session_state.yt_download_size = 0
 if "yt_is_zip" not in st.session_state:
     st.session_state.yt_is_zip = False
+if "cards_page" not in st.session_state:
+    st.session_state.cards_page = 1
 
 @st.cache_data(show_spinner=False)
 def get_logo_base64() -> Optional[str]:
@@ -553,7 +578,7 @@ if st.session_state.app_mode in ("collection", "search"):
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(
-    "🔗 **GitHub:** [google-collection-extractor](https://github.com/evile92/google-collection-extractor)\n\n"
+    "🔗 **GitHub:** [cineharvest](https://github.com/evile92/cineharvest)\n\n"
     "🚀 **Live at:** [cineharvest.streamlit.app](https://cineharvest.streamlit.app)"
 )
 
@@ -569,9 +594,13 @@ st.markdown(t["app_subtitle"])
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_search_media_database(query: str, tmdb_key: Optional[str] = None) -> List[Dict[str, Any]]:
+def cached_search_media_database(
+    query: str,
+    tmdb_key: Optional[str] = None,
+    lang: str = "en",
+) -> List[Dict[str, Any]]:
     """Cached wrapper around search_media_database to avoid redundant API calls."""
-    return search_media_database(query, tmdb_key=tmdb_key)
+    return search_media_database(query, tmdb_key=tmdb_key, lang=lang)
 
 
 # Helper to get synopsis in the user's selected language
@@ -579,6 +608,11 @@ def get_synopsis_text(item: Dict[str, Any], lang: str) -> Optional[str]:
     if lang == "ar":
         return item.get("synopsis_ar") or item.get("synopsis")
     return item.get("synopsis") or item.get("synopsis_ar")
+
+
+def _esc(val: Any) -> str:
+    """Safely escape text/URL strings for HTML content and single/double-quoted attributes."""
+    return html.escape(str(val or ""), quote=True)
 
 
 # Helper to render styled HTML badges for magnet/torrent buttons + YouTube Trailer
@@ -591,25 +625,25 @@ def render_download_badges(
     badges = []
     if google_url:
         badges.append(
-            f'<a href="{google_url}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#4b5563; color:white; border-radius:5px; text-decoration:none; font-size:12px;">🔗 Link</a>'
+            f'<a href="{_esc(google_url)}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#4b5563; color:white; border-radius:5px; text-decoration:none; font-size:12px;">🔗 Link</a>'
         )
     if title:
         q_trailer = urllib.parse.quote(f"{title} {year or ''} official trailer".strip())
         yt_trailer_url = f"https://www.youtube.com/results?search_query={q_trailer}"
         trailer_lbl = "▶️ إعلان" if st.session_state.lang == "ar" else "▶️ Trailer"
         badges.append(
-            f'<a href="{yt_trailer_url}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#dc2626; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">{trailer_lbl}</a>'
+            f'<a href="{_esc(yt_trailer_url)}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#dc2626; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">{trailer_lbl}</a>'
         )
     for tr in torrents[:3]:
-        q = tr.get("quality", "HD")
-        size = f" ({tr.get('size')})" if tr.get("size") else ""
+        q = _esc(tr.get("quality", "HD"))
+        size = f" ({_esc(tr.get('size'))})" if tr.get("size") else ""
         if tr.get("magnet"):
             badges.append(
-                f'<a href="{tr["magnet"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#8b5cf6; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">🧲 {q}{size}</a>'
+                f'<a href="{_esc(tr["magnet"])}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#8b5cf6; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">🧲 {q}{size}</a>'
             )
         elif tr.get("url"):
             badges.append(
-                f'<a href="{tr["url"]}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#2563eb; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📥 Torrent {q}{size}</a>'
+                f'<a href="{_esc(tr["url"])}" target="_blank" style="display:inline-block; margin:2px; padding:4px 10px; background:#2563eb; color:white; border-radius:5px; text-decoration:none; font-size:12px; font-weight:bold;">📥 Torrent {q}{size}</a>'
             )
     return "".join(badges)
 
@@ -620,7 +654,7 @@ def render_media_card(item: Dict[str, Any], clamp_synopsis: bool = True) -> None
         poster = item.get("poster_url")
         if poster:
             st.markdown(
-                f'<img src="{poster}" style="width:100%; height:310px; object-fit:cover; border-radius:8px; margin-bottom:8px;" loading="lazy" />',
+                f'<img src="{_esc(poster)}" style="width:100%; height:310px; object-fit:cover; border-radius:8px; margin-bottom:8px;" loading="lazy" />',
                 unsafe_allow_html=True,
             )
         else:
@@ -629,11 +663,12 @@ def render_media_card(item: Dict[str, Any], clamp_synopsis: bool = True) -> None
                 unsafe_allow_html=True,
             )
 
-        title_str = item.get("title", "")
-        year_str = f" ({item['year']})" if item.get("year") else ""
+        title_raw = item.get("title", "")
+        year_raw = f" ({item['year']})" if item.get("year") else ""
+        title_esc = _esc(f"{title_raw}{year_raw}")
         rating_str = f"⭐ {item['rating']}" if item.get("rating") else ""
         st.markdown(
-            f"<div style='font-weight:700; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;' title='{title_str}{year_str}'>{title_str}{year_str}</div>",
+            f"<div style='font-weight:700; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;' title=\"{title_esc}\">{title_esc}</div>",
             unsafe_allow_html=True,
         )
 
@@ -643,19 +678,66 @@ def render_media_card(item: Dict[str, Any], clamp_synopsis: bool = True) -> None
         genre_badge = f" • {GENRE_ICONS.get(p_genre, '')} {GENRE_ARABIC.get(p_genre, p_genre) if st.session_state.lang == 'ar' else p_genre}" if p_genre else ""
         st.caption(f"`{badge_text}`{genre_badge} {rating_str}")
 
-        syn_text = get_synopsis_text(item, st.session_state.lang) or ""
+        syn_raw = get_synopsis_text(item, st.session_state.lang) or ""
+        syn_esc = _esc(syn_raw)
         if clamp_synopsis:
             st.markdown(
-                f"<div style='font-size:13px; line-height:1.45; min-height:56px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:8px;' title='{syn_text}'>{syn_text}</div>",
+                f"<div style='font-size:13px; line-height:1.45; min-height:56px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:8px;' title=\"{syn_esc}\">{syn_esc}</div>",
                 unsafe_allow_html=True,
             )
-        elif syn_text:
-            st.markdown(f"<p style='font-size:13px; line-height:1.45;'>{syn_text}</p>", unsafe_allow_html=True)
+        elif syn_raw:
+            st.markdown(f"<p style='font-size:13px; line-height:1.45;'>{syn_esc}</p>", unsafe_allow_html=True)
 
         it_torrents = item.get("torrents", [])
-        badges_html = render_download_badges(it_torrents, item.get("url"), title=title_str, year=item.get("year"))
+        badges_html = render_download_badges(it_torrents, item.get("url"), title=title_raw, year=item.get("year"))
         if badges_html:
             st.markdown(badges_html, unsafe_allow_html=True)
+
+
+def render_paginated_cards(items: List[Dict[str, Any]], key_prefix: str, per_page: int = 24) -> None:
+    """Render 3-column media cards grid with lightweight client pagination for large lists."""
+    total = len(items)
+    if not total:
+        st.info("No matching items found.")
+        return
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page_state_key = f"{key_prefix}_cards_page"
+    if page_state_key not in st.session_state:
+        st.session_state[page_state_key] = 1
+    if st.session_state[page_state_key] > total_pages:
+        st.session_state[page_state_key] = total_pages
+    if st.session_state[page_state_key] < 1:
+        st.session_state[page_state_key] = 1
+
+    cur_page = st.session_state[page_state_key]
+    start_idx = (cur_page - 1) * per_page
+    end_idx = min(start_idx + per_page, total)
+    page_slice = items[start_idx:end_idx]
+
+    num_cols = 3
+    for i in range(0, len(page_slice), num_cols):
+        chunk = page_slice[i : i + num_cols]
+        cols = st.columns(num_cols)
+        for col_idx, it in enumerate(chunk):
+            with cols[col_idx]:
+                render_media_card(it, clamp_synopsis=True)
+
+    if total_pages > 1:
+        c_prev, c_info, c_next = st.columns([1, 2, 1])
+        with c_prev:
+            if st.button(t["card_prev"], disabled=(cur_page <= 1), key=f"{key_prefix}_prev_pg", use_container_width=True):
+                st.session_state[page_state_key] = cur_page - 1
+                st.rerun()
+        with c_info:
+            st.markdown(
+                f"<div style='text-align:center; padding-top:6px; font-weight:600;'>{t['card_page_label'].format(cur=cur_page, tot=total_pages, count=total)}</div>",
+                unsafe_allow_html=True,
+            )
+        with c_next:
+            if st.button(t["card_next"], disabled=(cur_page >= total_pages), key=f"{key_prefix}_next_pg", use_container_width=True):
+                st.session_state[page_state_key] = cur_page + 1
+                st.rerun()
 
 
 def render_export_buttons(items: List[Dict[str, Any]], file_prefix: str = "collection", collection_title: str = "Collection Watchlist") -> None:
@@ -720,12 +802,12 @@ def format_duration(seconds: Optional[int]) -> str:
     return f"{m:02d}:{s:02d}"
 
 
-def format_file_size(size_bytes: Optional[int]) -> str:
+def format_file_size(size_bytes: Optional[float]) -> str:
     """Format bytes into readable string (KB, MB, GB)."""
     if not size_bytes or size_bytes <= 0:
         return "0 B"
     if size_bytes < 1024:
-        return f"{size_bytes} B"
+        return f"{int(size_bytes)} B"
     elif size_bytes < 1024 * 1024:
         return f"{size_bytes / 1024:.1f} KB"
     elif size_bytes < 1024 * 1024 * 1024:
@@ -733,70 +815,16 @@ def format_file_size(size_bytes: Optional[int]) -> str:
     return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-# Export Helpers
-def generate_txt(items: List[Dict[str, Any]]) -> str:
-    return "\n".join(item.get("title", "").strip() for item in items if item.get("title"))
-
-
-def generate_json(items: List[Dict[str, Any]]) -> str:
-    return json.dumps(items, ensure_ascii=False, indent=2)
-
-
-def generate_csv(items: List[Dict[str, Any]], lang: str = "en") -> str:
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "Title", "Type", "Genres", "Year", "Rating", "Synopsis", "Synopsis_AR",
-        "TorrentURL_1080p", "MagnetLink_1080p", "TorrentURL_720p", "MagnetLink_720p",
-        "GoogleURL", "PosterURL"
-    ])
-    # Group and sort: Movies first, TV series second, then by genre and title
-    sorted_items = sorted(
-        items,
-        key=lambda x: (
-            0 if x.get("type") != "tv" else 1,
-            x.get("primary_genre") or (x.get("genres", ["Other"])[0] if x.get("genres") else "Other"),
-            x.get("title", "").lower()
-        )
-    )
-    for item in sorted_items:
-        torrents = item.get("torrents", [])
-        t_1080 = next((x for x in torrents if x.get("quality") == "1080p"), None)
-        t_720 = next((x for x in torrents if x.get("quality") == "720p"), None)
-        if not t_1080 and torrents:
-            t_1080 = torrents[0]
-
-        genres_str = ", ".join(item.get("genres", [])) if item.get("genres") else (item.get("primary_genre") or "")
-
-        writer.writerow([
-            item.get("title", ""),
-            item.get("type") or "",
-            genres_str,
-            item.get("year") or "",
-            item.get("rating") or "",
-            item.get("synopsis") or "",
-            item.get("synopsis_ar") or "",
-            t_1080.get("url") if t_1080 else "",
-            t_1080.get("magnet") if t_1080 else "",
-            t_720.get("url") if t_720 else "",
-            t_720.get("magnet") if t_720 else "",
-            item.get("url") or "",
-            item.get("poster_url") or "",
-        ])
-    return output.getvalue()
-
-
-def generate_letterboxd_csv(items: List[Dict[str, Any]]) -> str:
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Title", "Year", "URL"])
-    for item in items:
-        writer.writerow([
-            item.get("title", ""),
-            item.get("year") or "",
-            item.get("url") or "",
-        ])
-    return output.getvalue()
+def cleanup_previous_yt_job() -> None:
+    """Safely remove temporary download directory associated with the current user session."""
+    old_dir = st.session_state.get("yt_job_dir")
+    if old_dir:
+        shutil.rmtree(old_dir, ignore_errors=True)
+    st.session_state.yt_job_dir = None
+    st.session_state.yt_download_path = None
+    st.session_state.yt_download_filename = None
+    st.session_state.yt_download_size = 0
+    st.session_state.yt_is_zip = False
 
 
 # ==============================================================================
@@ -825,24 +853,27 @@ if st.session_state.app_mode == "collection":
             pw = browser = context = page = None
             try:
                 status_box.write(t["status_launching"])
-                pw, browser, context, page = launch_browser(headless=True)
+                ensure_playwright_browsers()
+                pw, browser, context, page = launch_browser(headless=True, block_assets=True)
 
                 intercepted_items: List[Dict[str, Any]] = []
                 setup_network_interception(page, intercepted_items)
 
                 status_box.write(t["status_navigating"])
                 open_collection(page, url_input.strip())
-                time.sleep(2)
 
                 page_placeholder = status_box.empty()
                 scroll_placeholder = status_box.empty()
-                discovered_counts = []
+                page_peaks: Dict[int, int] = {}
+                active_page_holder = [1]
 
                 def on_page_progress(page_num: int, count_so_far: int):
+                    active_page_holder[0] = page_num
                     page_placeholder.write(t["status_page_progress"].format(page=page_num, count=count_so_far))
 
                 def on_progress(count: int):
-                    discovered_counts.append(count)
+                    p = active_page_holder[0]
+                    page_peaks[p] = max(page_peaks.get(p, 0), count)
                     scroll_placeholder.write(t["status_discovered"].format(count=count))
 
                 status_box.write(t["status_scrolling"])
@@ -868,11 +899,14 @@ if st.session_state.app_mode == "collection":
 
                 if tmdb_api_key and tmdb_api_key.strip() and unique_items:
                     status_box.write(t["status_tmdb"])
-                    unique_items = enrich_items_with_tmdb(unique_items, tmdb_api_key.strip())
+                    unique_items = enrich_items_with_tmdb(
+                        unique_items,
+                        tmdb_api_key.strip(),
+                        lang=st.session_state.lang,
+                    )
 
-                total_discovered = max(len(unique_items), discovered_counts[-1] if discovered_counts else len(unique_items))
+                total_discovered = max(len(unique_items), sum(page_peaks.values()) if page_peaks else len(unique_items))
                 duplicates_count = max(0, total_discovered - len(unique_items))
-
                 strategy_display = f"{strategy_used} ({total_pages} pages)" if total_pages > 1 else strategy_used
 
                 st.session_state.extracted_items = unique_items
@@ -883,6 +917,7 @@ if st.session_state.app_mode == "collection":
                     "strategy": strategy_display,
                     "pages": total_pages,
                 }
+                st.session_state.col_cards_page = 1
                 if unique_items:
                     st.session_state.random_pick = random.choice(unique_items)
 
@@ -918,16 +953,68 @@ if st.session_state.app_mode == "collection":
         m3.metric(t["metric_unique"], stats["unique"])
         m4.metric(t["metric_strategy"], stats["strategy"])
 
-        # Random Recommendation
+        # Export & Downloads
         st.markdown("---")
+        render_export_buttons(items, file_prefix="collection", collection_title="Collection Watchlist")
+
+        # Filters & Search (placed above Random Pick & Preview so Random Pick respects active filters)
+        st.markdown("---")
+        st.subheader(t["preview_header"])
+
+        col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
+        with col_f1:
+            type_opts = [t["all_types"], t["movie"], t["tv"]]
+            filter_val = st.selectbox(t["filter_type"], options=type_opts, index=0, key="col_filter_type")
+        with col_f2:
+            all_extracted_genres = set()
+            for it in items:
+                for g in it.get("genres", []):
+                    if g:
+                        all_extracted_genres.add(g)
+                if it.get("primary_genre"):
+                    all_extracted_genres.add(it["primary_genre"])
+            genre_list = sorted(list(all_extracted_genres))
+            genre_display_opts = [t["all_genres"]] + [
+                f"{GENRE_ICONS.get(g, '🎬')} {GENRE_ARABIC.get(g, g) if st.session_state.lang == 'ar' else g}"
+                for g in genre_list
+            ]
+            genre_map = {
+                f"{GENRE_ICONS.get(g, '🎬')} {GENRE_ARABIC.get(g, g) if st.session_state.lang == 'ar' else g}": g
+                for g in genre_list
+            }
+            selected_genre_display = st.selectbox(t["filter_genre"], options=genre_display_opts, index=0, key="col_filter_genre")
+        with col_f3:
+            search_query = st.text_input(t["search_box"], value="", placeholder="e.g. Inception, Breaking Bad...", key="col_filter_search")
+
+        filtered_items = items
+        if filter_val == t["movie"]:
+            filtered_items = [x for x in filtered_items if x.get("type") != "tv"]
+        elif filter_val == t["tv"]:
+            filtered_items = [x for x in filtered_items if x.get("type") == "tv"]
+
+        if selected_genre_display != t["all_genres"]:
+            chosen_genre = genre_map.get(selected_genre_display)
+            if chosen_genre:
+                filtered_items = [
+                    x for x in filtered_items
+                    if chosen_genre in x.get("genres", []) or x.get("primary_genre") == chosen_genre
+                ]
+
+        if search_query.strip():
+            q = search_query.strip().lower()
+            filtered_items = [x for x in filtered_items if q in x.get("title", "").lower()]
+
+        # Random Recommendation (picks from filtered_items when available)
         with st.container():
+            st.markdown("---")
             st.subheader(t["random_box_title"])
             st.caption(t["random_box_desc"])
 
+            pick_pool = filtered_items if filtered_items else items
             col_rand_btn, _ = st.columns([2, 3])
             with col_rand_btn:
-                if st.button(t["random_btn"], type="secondary", use_container_width=True):
-                    st.session_state.random_pick = random.choice(items)
+                if st.button(t["random_btn"], type="secondary", use_container_width=True, disabled=not pick_pool):
+                    st.session_state.random_pick = random.choice(pick_pool)
 
             if st.session_state.random_pick:
                 rand_item = st.session_state.random_pick
@@ -971,70 +1058,11 @@ if st.session_state.app_mode == "collection":
                         else:
                             st.caption(t["no_downloads"])
 
-        # Export & Downloads
         st.markdown("---")
-        render_export_buttons(items, file_prefix="collection", collection_title="Collection Watchlist")
-
-        # Previews
-        st.markdown("---")
-        st.subheader(t["preview_header"])
-
-        col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
-        with col_f1:
-            type_opts = [t["all_types"], t["movie"], t["tv"]]
-            filter_val = st.selectbox(t["filter_type"], options=type_opts, index=0)
-        with col_f2:
-            all_extracted_genres = set()
-            for it in items:
-                for g in it.get("genres", []):
-                    if g:
-                        all_extracted_genres.add(g)
-                if it.get("primary_genre"):
-                    all_extracted_genres.add(it["primary_genre"])
-            genre_list = sorted(list(all_extracted_genres))
-            genre_display_opts = [t["all_genres"]] + [
-                f"{GENRE_ICONS.get(g, '🎬')} {GENRE_ARABIC.get(g, g) if st.session_state.lang == 'ar' else g}"
-                for g in genre_list
-            ]
-            genre_map = {
-                f"{GENRE_ICONS.get(g, '🎬')} {GENRE_ARABIC.get(g, g) if st.session_state.lang == 'ar' else g}": g
-                for g in genre_list
-            }
-            selected_genre_display = st.selectbox(t["filter_genre"], options=genre_display_opts, index=0)
-        with col_f3:
-            search_query = st.text_input(t["search_box"], value="", placeholder="e.g. Inception, Breaking Bad...")
-
-        filtered_items = items
-        if filter_val == t["movie"]:
-            filtered_items = [x for x in filtered_items if x.get("type") != "tv"]
-        elif filter_val == t["tv"]:
-            filtered_items = [x for x in filtered_items if x.get("type") == "tv"]
-
-        if selected_genre_display != t["all_genres"]:
-            chosen_genre = genre_map.get(selected_genre_display)
-            if chosen_genre:
-                filtered_items = [
-                    x for x in filtered_items
-                    if chosen_genre in x.get("genres", []) or x.get("primary_genre") == chosen_genre
-                ]
-
-        if search_query.strip():
-            q = search_query.strip().lower()
-            filtered_items = [x for x in filtered_items if q in x.get("title", "").lower()]
-
         tab_cards, tab_table, tab_md = st.tabs([t["tab_cards"], t["tab_table"], t["tab_md"]])
 
         with tab_cards:
-            if not filtered_items:
-                st.info("No matching items found.")
-            else:
-                num_cols = 3
-                for i in range(0, len(filtered_items), num_cols):
-                    chunk = filtered_items[i : i + num_cols]
-                    cols = st.columns(num_cols)
-                    for col_idx, it in enumerate(chunk):
-                        with cols[col_idx]:
-                            render_media_card(it, clamp_synopsis=True)
+            render_paginated_cards(filtered_items, key_prefix="col", per_page=24)
 
         with tab_table:
             table_rows = []
@@ -1082,8 +1110,13 @@ elif st.session_state.app_mode == "search":
 
     if do_search and direct_query.strip():
         with st.spinner(t["direct_status_searching"]):
-            search_res = cached_search_media_database(direct_query.strip(), tmdb_key=tmdb_api_key or None)
+            search_res = cached_search_media_database(
+                direct_query.strip(),
+                tmdb_key=tmdb_api_key or None,
+                lang=st.session_state.lang,
+            )
             st.session_state.direct_search_results = search_res
+            st.session_state.search_cards_page = 1
 
     if st.session_state.direct_search_results is not None:
         results = st.session_state.direct_search_results
@@ -1092,19 +1125,9 @@ elif st.session_state.app_mode == "search":
             st.warning(t["direct_no_results"])
         else:
             st.markdown(t["direct_results_count"].format(count=len(results)))
-
-            # Export row for search results
             render_export_buttons(results, file_prefix="search_results", collection_title="Search Results")
-
-            # Display Search Results in 3-column cards
             st.markdown("---")
-            num_cols = 3
-            for i in range(0, len(results), num_cols):
-                chunk = results[i : i + num_cols]
-                cols = st.columns(num_cols)
-                for col_idx, item in enumerate(chunk):
-                    with cols[col_idx]:
-                        render_media_card(item, clamp_synopsis=True)
+            render_paginated_cards(results, key_prefix="search", per_page=24)
 
 
 # ==============================================================================
@@ -1113,28 +1136,34 @@ elif st.session_state.app_mode == "search":
 elif st.session_state.app_mode == "youtube":
     st.markdown("---")
     st.subheader(t["yt_title"])
-    def get_effective_cookies() -> Optional[str]:
-        """Retrieve cookies from session state, Streamlit secrets, or environment."""
+
+    def get_effective_cookies() -> Tuple[Optional[str], bool]:
+        """Retrieve cookies and return (cookies_str, from_env_or_secrets)."""
         if st.session_state.get("yt_custom_cookies"):
-            return st.session_state.yt_custom_cookies
+            return st.session_state.yt_custom_cookies, False
         try:
             if "YOUTUBE_COOKIES" in st.secrets:
-                return str(st.secrets["YOUTUBE_COOKIES"])
+                return str(st.secrets["YOUTUBE_COOKIES"]), True
             if "youtube_cookies" in st.secrets:
-                return str(st.secrets["youtube_cookies"])
+                return str(st.secrets["youtube_cookies"]), True
         except Exception:
             pass
-        return None
+        if os.getenv("YOUTUBE_COOKIES"):
+            return os.getenv("YOUTUBE_COOKIES"), True
+        return None, False
 
-    effective_cookies = get_effective_cookies()
+    effective_cookies, cookies_from_secrets = get_effective_cookies()
 
     with st.expander(t["yt_bypass_expander"], expanded=False):
         st.caption(t["yt_bypass_desc"])
         if effective_cookies:
-            st.success(t["yt_cookies_active"].format(count=len(effective_cookies)))
-            if st.button(t["yt_cookies_clear"], key="yt_clear_cookies_btn"):
-                st.session_state.yt_custom_cookies = None
-                st.rerun()
+            if cookies_from_secrets:
+                st.success(t["yt_cookies_auto_detected"])
+            else:
+                st.success(t["yt_cookies_active"].format(count=len(effective_cookies)))
+                if st.button(t["yt_cookies_clear"], key="yt_clear_cookies_btn"):
+                    st.session_state.yt_custom_cookies = None
+                    st.rerun()
         else:
             cookie_file = st.file_uploader(t["yt_cookies_upload"], type=["txt"], key="yt_cookie_file_up")
             if cookie_file is not None:
@@ -1167,21 +1196,39 @@ elif st.session_state.app_mode == "youtube":
         st.write("")
         btn_yt_inspect = st.button(t["yt_btn_inspect"], type="primary", use_container_width=True)
 
-    if btn_yt_inspect and yt_url_input.strip():
+    force_playlist_choice: Optional[bool] = None
+    if yt_url_input.strip() and has_video_and_playlist(yt_url_input.strip()):
+        scope_sel = st.radio(
+            t["yt_scope_label"],
+            options=[t["yt_scope_single"], t["yt_scope_playlist"]],
+            index=0,
+            horizontal=True,
+            key="yt_scope_radio",
+        )
+        force_playlist_choice = (scope_sel == t["yt_scope_playlist"])
+
+    if btn_yt_inspect:
         url_clean = yt_url_input.strip()
-        with st.spinner(t["yt_fetching_info"]):
-            try:
-                info = extract_media_info(url_clean, cookies_content=effective_cookies)
-                st.session_state.yt_info = info
-                st.session_state.yt_downloaded_data = None
-                st.session_state.yt_download_filename = None
-            except Exception as e:
-                st.error(t["yt_error_fetching"].format(err=str(e)))
-                st.session_state.yt_info = None
+        if not is_valid_youtube_url(url_clean):
+            st.error(t["yt_invalid_url"])
+        else:
+            cleanup_previous_yt_job()
+            with st.spinner(t["yt_fetching_info"]):
+                try:
+                    info = extract_media_info(
+                        url_clean,
+                        is_playlist=force_playlist_choice,
+                        cookies_content=effective_cookies,
+                    )
+                    st.session_state.yt_info = info
+                except Exception as e:
+                    st.error(t["yt_error_fetching"].format(err=str(e)))
+                    st.session_state.yt_info = None
 
     if st.session_state.get("yt_info"):
         yt_data = st.session_state.yt_info
         is_pl = yt_data.get("is_playlist", False)
+        inspected_url = yt_data.get("url") or yt_url_input.strip()
 
         st.markdown("---")
         with st.container(border=True):
@@ -1246,8 +1293,10 @@ elif st.session_state.app_mode == "youtube":
         with col_opt2:
             if is_audio:
                 audio_fmt = st.selectbox(t["yt_audio_format"], options=["MP3", "M4A", "WAV"], index=0)
+                embed_subs = False
             else:
                 video_fmt = st.selectbox("Video Format:", options=["MP4"], index=0)
+                embed_subs = st.checkbox(t["yt_embed_subs"], value=False, key="yt_embed_subs_cb")
 
         with col_opt3:
             if is_audio:
@@ -1281,12 +1330,13 @@ elif st.session_state.app_mode == "youtube":
             if is_pl and not selected_indices:
                 st.warning("Please select at least one track to download.")
             else:
-                download_dir = Path("temp_downloads")
-                download_dir.mkdir(exist_ok=True)
-                cleanup_download_dir(download_dir)
+                cleanup_previous_yt_job()
+                job_dir = Path(tempfile.mkdtemp(prefix="cineharvest_dl_"))
+                st.session_state.yt_job_dir = str(job_dir)
 
                 status_placeholder = st.empty()
                 progress_bar = st.progress(0.0)
+                sub_langs_opt = ["ar", "en"] if (not is_audio and embed_subs) else None
 
                 def ui_progress_hook(d: Dict[str, Any]):
                     if d.get("status") == "downloading":
@@ -1299,7 +1349,9 @@ elif st.session_state.app_mode == "youtube":
                         if total_bytes > 0:
                             ratio = min(1.0, max(0.0, downloaded / total_bytes))
                             progress_bar.progress(ratio)
-                            status_placeholder.text(f"⏳ {int(ratio*100)}% ({format_file_size(downloaded)} / {format_file_size(total_bytes)}){speed_str}{eta_str}")
+                            status_placeholder.text(
+                                f"⏳ {int(ratio * 100)}% ({format_file_size(downloaded)} / {format_file_size(total_bytes)}){speed_str}{eta_str}"
+                            )
                     elif d.get("status") == "finished":
                         progress_bar.progress(1.0)
                         status_placeholder.text("⚙️ Processing media with FFmpeg...")
@@ -1311,9 +1363,9 @@ elif st.session_state.app_mode == "youtube":
                                 status_placeholder.text(t["yt_downloading_item"].format(cur=cur, tot=tot, title=title[:40]))
                                 progress_bar.progress(min(1.0, cur / tot))
 
-                            zip_file, files = download_playlist_media(
-                                playlist_url=yt_url_input.strip(),
-                                output_dir=download_dir,
+                            zip_file, _files = download_playlist_media(
+                                playlist_url=inspected_url,
+                                output_dir=job_dir,
                                 media_type="audio" if is_audio else "video",
                                 media_format=audio_fmt.lower() if is_audio else "mp4",
                                 quality=bitrate_val if is_audio else res_val,
@@ -1321,24 +1373,26 @@ elif st.session_state.app_mode == "youtube":
                                 item_callback=on_item,
                                 progress_hook=ui_progress_hook,
                                 cookies_content=effective_cookies,
+                                subtitles_langs=sub_langs_opt,
                             )
-                            with open(zip_file, "rb") as f:
-                                st.session_state.yt_downloaded_data = f.read()
+                            st.session_state.yt_download_path = str(zip_file)
                             st.session_state.yt_download_filename = zip_file.name
+                            st.session_state.yt_download_size = zip_file.stat().st_size
                             st.session_state.yt_is_zip = True
                         else:
                             out_file = download_single_video(
-                                url=yt_url_input.strip(),
-                                output_dir=download_dir,
+                                url=inspected_url,
+                                output_dir=job_dir,
                                 media_type="audio" if is_audio else "video",
                                 media_format=audio_fmt.lower() if is_audio else "mp4",
                                 quality=bitrate_val if is_audio else res_val,
                                 progress_hook=ui_progress_hook,
                                 cookies_content=effective_cookies,
+                                subtitles_langs=sub_langs_opt,
                             )
-                            with open(out_file, "rb") as f:
-                                st.session_state.yt_downloaded_data = f.read()
+                            st.session_state.yt_download_path = str(out_file)
                             st.session_state.yt_download_filename = out_file.name
+                            st.session_state.yt_download_size = out_file.stat().st_size
                             st.session_state.yt_is_zip = False
 
                         status_placeholder.empty()
@@ -1346,27 +1400,36 @@ elif st.session_state.app_mode == "youtube":
                         st.success(t["yt_download_complete"])
                     except Exception as err:
                         st.error(f"Download Error: {err}")
-                        st.session_state.yt_downloaded_data = None
-                    finally:
-                        cleanup_download_dir(download_dir)
+                        cleanup_previous_yt_job()
 
-        if st.session_state.get("yt_downloaded_data") is not None:
-            data_bytes = st.session_state.yt_downloaded_data
-            fname = st.session_state.yt_download_filename
+        dl_path_str = st.session_state.get("yt_download_path")
+        if dl_path_str and Path(dl_path_str).exists():
+            dl_path = Path(dl_path_str)
+            fname = st.session_state.yt_download_filename or dl_path.name
+            fsize = st.session_state.get("yt_download_size") or dl_path.stat().st_size
             is_zip_dl = st.session_state.get("yt_is_zip", False)
             btn_lbl = t["yt_btn_save_zip"] if is_zip_dl else t["yt_btn_save_file"]
-            mime_type = "application/zip" if is_zip_dl else ("audio/mpeg" if fname.endswith(".mp3") else ("audio/wav" if fname.endswith(".wav") else "video/mp4"))
+            mime_type = (
+                "application/zip"
+                if is_zip_dl
+                else (
+                    "audio/mpeg"
+                    if fname.endswith(".mp3")
+                    else ("audio/wav" if fname.endswith(".wav") else "video/mp4")
+                )
+            )
 
             col_dl_btn, col_dl_info = st.columns([2, 2])
             with col_dl_btn:
-                st.download_button(
-                    label=f"{btn_lbl} ({format_file_size(len(data_bytes))})",
-                    data=data_bytes,
-                    file_name=fname,
-                    mime=mime_type,
-                    type="primary",
-                    use_container_width=True,
-                )
+                with open(dl_path, "rb") as dl_fh:
+                    st.download_button(
+                        label=f"{btn_lbl} ({format_file_size(fsize)})",
+                        data=dl_fh,
+                        file_name=fname,
+                        mime=mime_type,
+                        type="primary",
+                        use_container_width=True,
+                    )
             with col_dl_info:
-                st.info(f"📄 **{fname}** ({format_file_size(len(data_bytes))})")
+                st.info(f"📄 **{fname}** ({format_file_size(fsize)})")
 

@@ -45,8 +45,8 @@ A robust, production-grade Python tool and web application designed to automate 
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/evile92/google-collection-extractor.git
-   cd google-collection-extractor
+   git clone https://github.com/evile92/cineharvest.git
+   cd cineharvest
    ```
 
 2. **Install Python dependencies:**

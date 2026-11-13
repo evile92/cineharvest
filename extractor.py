@@ -42,8 +42,9 @@ class ExtractionError(Exception):
 def launch_browser(
     headless: bool = True,
     session_path: Optional[str] = None,
+    block_assets: bool = True,
 ) -> Tuple[Playwright, Browser, BrowserContext, Page]:
-    """Launch Playwright Chromium instance with anti-detection options and optional session restoration."""
+    """Launch Playwright Chromium instance with anti-detection options and optional asset blocking."""
     pw = sync_playwright().start()
     browser_args = [
         "--disable-blink-features=AutomationControlled",
@@ -98,6 +99,16 @@ def launch_browser(
     context = browser.new_context(**context_kwargs)
     page = context.new_page()
     page.set_default_timeout(PAGE_TIMEOUT)
+
+    if block_assets and headless:
+        def _abort_heavy_assets(route):
+            if route.request.resource_type in ("image", "media", "font"):
+                route.abort()
+            else:
+                route.continue_()
+
+        page.route("**/*", _abort_heavy_assets)
+
     return pw, browser, context, page
 
 
@@ -153,8 +164,14 @@ def open_collection(page: Page, url: str) -> None:
             f"Please check your internet connection and verify the URL."
         ) from e
 
-    # Wait for initial hydration
-    time.sleep(2)
+    # Wait smartly for collection items to hydrate instead of fixed blind delay
+    try:
+        page.wait_for_selector(
+            'span[jsname="r4nke"], a[href*="/search?q="], div[jsname="Qm9wMc"], div.C4h8Ec',
+            timeout=4500,
+        )
+    except Exception:
+        time.sleep(1.0)
 
     # Check for CAPTCHA or Login requirements or Expired Share Links
     current_url = page.url
@@ -203,10 +220,12 @@ def scroll_until_complete(
     no_change_limit: int = NO_CHANGE_LIMIT,
 ) -> int:
     """Intelligently scrolls the collection until no new items are loaded.
-    
-    Monitors DOM changes, waits for lazy-loaded assets, and halts when items plateau.
+
+    Monitors both DOM item count and scrollHeight, performs a bounce check to wake lazy observers,
+    and terminates early when both metrics plateau.
     """
     last_count = _get_current_item_count(page)
+    last_height = page.evaluate("() => document.body.scrollHeight") or 0
     no_change_attempts = 0
     scroll_count = 0
 
@@ -216,40 +235,39 @@ def scroll_until_complete(
     while scroll_count < max_scrolls:
         scroll_count += 1
 
-        # Scroll to bottom smoothly
-        page.evaluate("""() => {
-            window.scrollTo({
-                top: document.body.scrollHeight,
-                behavior: 'smooth'
-            });
-        }""")
-
-        # Wait for dynamic network requests and rendering
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(scroll_delay)
 
         new_count = _get_current_item_count(page)
+        new_height = page.evaluate("() => document.body.scrollHeight") or 0
 
-        if new_count > last_count:
-            last_count = new_count
+        if new_count > last_count or new_height > last_height:
+            last_count = max(last_count, new_count)
+            last_height = max(last_height, new_height)
             no_change_attempts = 0
-            if progress_callback:
+            if progress_callback and new_count > 0:
                 progress_callback(new_count)
         else:
             no_change_attempts += 1
-            # Secondary check: slight scroll up and back down to trigger lazy observers
-            if no_change_attempts >= 2:
+            if no_change_attempts == 2:
                 page.evaluate("window.scrollBy(0, -300)")
-                time.sleep(0.5)
+                time.sleep(0.35)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 time.sleep(scroll_delay)
                 new_count = _get_current_item_count(page)
-                if new_count > last_count:
-                    last_count = new_count
+                new_height = page.evaluate("() => document.body.scrollHeight") or 0
+                if new_count > last_count or new_height > last_height:
+                    last_count = max(last_count, new_count)
+                    last_height = max(last_height, new_height)
                     no_change_attempts = 0
-                    if progress_callback:
+                    if progress_callback and new_count > 0:
                         progress_callback(new_count)
                     continue
 
+            # Once bounce verified and both height + count plateaued for 3 attempts, stop waiting
+            if no_change_attempts >= min(no_change_limit, 3) and new_height == last_height:
+                logger.info("Reached end of collection after %d unchanged checks.", no_change_attempts)
+                break
             if no_change_attempts >= no_change_limit:
                 logger.info("Reached end of collection: no new items loaded after %d attempts.", no_change_attempts)
                 break
@@ -398,77 +416,100 @@ def extract_collection_data(
     )
 
 
-def get_pagination_info(page: Page) -> Dict[str, Any]:
-    """Inspect current pagination state and check if a Next page button exists.
-    
-    Detects Google Collections pagination footers such as '< 1-200 of 234 >'
-    and assesses whether more items remain on subsequent pages.
-    """
-    try:
-        info = page.evaluate("""() => {
-            // Strategy 1: Find text matching '1-200 of 234' or '1-200 من 234'
-            const regex = /\\b(\\d+)[\\s–-]+(\\d+)\\s+(?:of|من|de|sur|\\/)\\s+(\\d+)\\b/i;
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-            let node;
-            while (node = walker.nextNode()) {
-                const text = node.textContent.trim();
-                const match = regex.exec(text);
-                if (match) {
-                    const start = parseInt(match[1], 10);
-                    const end = parseInt(match[2], 10);
-                    const total = parseInt(match[3], 10);
-                    
-                    const container = node.parentElement ? (node.parentElement.closest('div, nav, footer') || node.parentElement) : null;
-                    if (container) {
-                        const buttons = Array.from(container.querySelectorAll('button, div[role="button"], span[role="button"], a'));
-                        let nextBtn = buttons.find(b => {
-                            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                            return aria.includes('next') || aria.includes('تالي') || aria.includes('chevron_right');
-                        });
-                        if (!nextBtn && buttons.length >= 2) {
-                            const afterButtons = buttons.filter(b => (node.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
-                            nextBtn = afterButtons.length > 0 ? afterButtons[0] : buttons[buttons.length - 1];
-                        }
-                        
-                        const isNextDisabled = nextBtn ? (
-                            nextBtn.disabled === true ||
-                            nextBtn.getAttribute('aria-disabled') === 'true' ||
-                            nextBtn.classList.contains('disabled') ||
-                            nextBtn.hasAttribute('disabled')
-                        ) : (end >= total);
-                        
-                        return {
-                            has_pagination: true,
-                            current_text: match[0],
-                            start: start,
-                            end: end,
-                            total: total,
-                            has_next: !isNextDisabled && end < total,
-                            is_last_page: isNextDisabled || end >= total
-                        };
+_FIND_PAGINATION_JS = """(doClick) => {
+    const regex = /\\b(\\d+)[\\s–-]+(\\d+)\\s+(?:of|من|de|sur|\\/)\\s+(\\d+)\\b/i;
+    const isRtl = getComputedStyle(document.documentElement).direction === 'rtl' || document.dir === 'rtl';
+    const nextChevron = isRtl ? 'chevron_left' : 'chevron_right';
+
+    const isBtnDisabled = (b) => (
+        !b || b.disabled === true ||
+        b.getAttribute('aria-disabled') === 'true' ||
+        b.classList.contains('disabled') ||
+        b.hasAttribute('disabled')
+    );
+
+    const findExplicitNext = (root) => {
+        const buttons = Array.from(root.querySelectorAll('button, div[role="button"], span[role="button"], a'));
+        return buttons.find(b => {
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            const txt = (b.innerText || '').toLowerCase();
+            if (aria.includes('prev') || aria.includes('سابق')) return false;
+            return aria.includes('next') || aria.includes('تالي') || aria.includes('الصفحة التالية') ||
+                   aria.includes(nextChevron) || txt.includes(nextChevron);
+        });
+    };
+
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while (node = walker.nextNode()) {
+        const text = node.textContent.trim();
+        const match = regex.exec(text);
+        if (match) {
+            const start = parseInt(match[1], 10);
+            const end = parseInt(match[2], 10);
+            const total = parseInt(match[3], 10);
+            const container = node.parentElement ? (node.parentElement.closest('div, nav, footer') || node.parentElement) : null;
+            if (container) {
+                let nextBtn = findExplicitNext(container);
+                if (!nextBtn) {
+                    const buttons = Array.from(container.querySelectorAll('button, div[role="button"], span[role="button"], a'));
+                    if (buttons.length >= 2) {
+                        const afterButtons = buttons.filter(b => (node.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+                        nextBtn = afterButtons.length > 0 ? afterButtons[0] : buttons[buttons.length - 1];
                     }
                 }
-            }
-            
-            // Strategy 2: Check for explicit Next button via aria-label
-            const ariaBtn = document.querySelector('button[aria-label*="Next" i], button[aria-label*="تالي" i], [role="button"][aria-label*="Next" i]');
-            if (ariaBtn) {
-                const isDis = ariaBtn.disabled === true || ariaBtn.getAttribute('aria-disabled') === 'true';
+                const disabled = nextBtn ? isBtnDisabled(nextBtn) : (end >= total);
+                if (doClick) {
+                    if (nextBtn && !disabled) {
+                        nextBtn.click();
+                        return { clicked: true };
+                    }
+                    return { clicked: false };
+                }
                 return {
                     has_pagination: true,
-                    current_text: '',
-                    has_next: !isDis,
-                    is_last_page: isDis
+                    current_text: match[0],
+                    start: start,
+                    end: end,
+                    total: total,
+                    has_next: !disabled && end < total,
+                    is_last_page: disabled || end >= total
                 };
             }
-            
-            return {
-                has_pagination: false,
-                current_text: '',
-                has_next: false,
-                is_last_page: true
-            };
-        }""")
+        }
+    }
+
+    const fallbackBtn = findExplicitNext(document);
+    if (fallbackBtn) {
+        const disabled = isBtnDisabled(fallbackBtn);
+        if (doClick) {
+            if (!disabled) {
+                fallbackBtn.click();
+                return { clicked: true };
+            }
+            return { clicked: false };
+        }
+        return {
+            has_pagination: true,
+            current_text: '',
+            has_next: !disabled,
+            is_last_page: disabled
+        };
+    }
+
+    return doClick ? { clicked: false } : {
+        has_pagination: false,
+        current_text: '',
+        has_next: false,
+        is_last_page: true
+    };
+}"""
+
+
+def get_pagination_info(page: Page) -> Dict[str, Any]:
+    """Inspect current pagination state and check if a Next page button exists."""
+    try:
+        info = page.evaluate(_FIND_PAGINATION_JS, False)
         return info or {"has_pagination": False, "has_next": False}
     except Exception as e:
         logger.warning("Failed to evaluate pagination info: %s", e)
@@ -490,59 +531,16 @@ def build_page_number_url(current_url: str, page_number: int) -> str:
 
 def click_next_page(page: Page, previous_text: str = "", next_page_number: Optional[int] = None) -> bool:
     """Click the next page button or fall back to direct ?pageNumber=X URL navigation."""
-    # Attempt 1: Click the Next page button in the DOM
     try:
-        clicked = page.evaluate("""() => {
-            const regex = /\\b(\\d+)[\\s–-]+(\\d+)\\s+(?:of|من|de|sur|\\/)\\s+(\\d+)\\b/i;
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-            let node;
-            while (node = walker.nextNode()) {
-                const text = node.textContent.trim();
-                const match = regex.exec(text);
-                if (match) {
-                    const container = node.parentElement ? (node.parentElement.closest('div, nav, footer') || node.parentElement) : null;
-                    if (container) {
-                        const buttons = Array.from(container.querySelectorAll('button, div[role="button"], span[role="button"], a'));
-                        let nextBtn = buttons.find(b => {
-                            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                            return aria.includes('next') || aria.includes('تالي') || aria.includes('chevron_right');
-                        });
-                        if (!nextBtn && buttons.length >= 2) {
-                            const afterButtons = buttons.filter(b => (node.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
-                            nextBtn = afterButtons.length > 0 ? afterButtons[0] : buttons[buttons.length - 1];
-                        }
-                        if (nextBtn) {
-                            const isDis = nextBtn.disabled === true || nextBtn.getAttribute('aria-disabled') === 'true';
-                            if (!isDis) {
-                                nextBtn.click();
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Fallback: aria-label next
-            const ariaBtn = document.querySelector('button[aria-label*="Next" i], button[aria-label*="تالي" i], [role="button"][aria-label*="Next" i]');
-            if (ariaBtn) {
-                const isDis = ariaBtn.disabled === true || ariaBtn.getAttribute('aria-disabled') === 'true';
-                if (!isDis) {
-                    ariaBtn.click();
-                    return true;
-                }
-            }
-            return false;
-        }""")
-        
-        if clicked:
+        res = page.evaluate(_FIND_PAGINATION_JS, True)
+        if res and res.get("clicked"):
             logger.info("Clicked Next Page button in DOM. Waiting for transition...")
-            time.sleep(1.5)
+            time.sleep(1.0)
             page.evaluate("window.scrollTo(0, 0)")
-            time.sleep(1.5)
             try:
-                page.wait_for_load_state("networkidle", timeout=5000)
+                page.wait_for_load_state("networkidle", timeout=4000)
             except Exception:
-                pass
+                time.sleep(1.0)
             return True
     except Exception as e:
         logger.warning("Error clicking next page button in DOM: %s", e)

@@ -5,9 +5,13 @@ compatibility,
 and order-preserving deduplication.
 """
 
+import csv
 import html
+import io
+import json
 import re
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
 
 # Known Google UI / Navigation labels that must be discarded
 GOOGLE_UI_LABELS = {
@@ -110,58 +114,54 @@ def remove_duplicates_preserve_order(items: List[Dict[str, Any]]) -> List[Dict[s
     return unique_items
 
 
+TRAILING_YEAR_PATTERN = re.compile(r"\s*\(((?:19|20)\d{2})\)\s*$")
+FILM_SERIES_NOISE_PATTERN = re.compile(r"\b(?:film|movie)\s+series\b", re.I)
+TV_MEDIA_PATTERN = re.compile(
+    r"(?:\b(?:tv\s+series|television\s+series|tv\s+mini[\s-]?series|television\s+mini[\s-]?series|"
+    r"tv\s+show|television\s+show|mini[\s-]?series|docuseries|sitcom|limited\s+series|"
+    r"anthology\s+series|animated\s+series|anime\s+series|web\s+series|series)\b|"
+    r"مسلسل(?:\s+قصير)?|برنامج\s+تلفزيوني|سلسلة\s+تلفزيونية)",
+    re.I,
+)
+MOVIE_MEDIA_PATTERN = re.compile(
+    r"(?:\b(?:feature\s+film|short\s+film|motion\s+picture|film|movie)\b|فلم|فيلم|شريط\s+سينمائي)",
+    re.I,
+)
+
+
+def extract_title_and_year(raw_title: str) -> Tuple[str, Optional[str]]:
+    """Split a trailing parenthesized release year like 'Dune (2021)' from the title.
+
+    Preserves unparenthesized numeric titles such as '1917' or 'Blade Runner 2049'.
+    """
+    if not raw_title:
+        return "", None
+    m = TRAILING_YEAR_PATTERN.search(raw_title)
+    if not m:
+        return raw_title.strip(), None
+    base = raw_title[:m.start()].strip()
+    if not base:
+        return raw_title.strip(), None
+    return base, m.group(1)
+
+
 def detect_media_type(text_or_metadata: Optional[str]) -> Optional[str]:
     """Detect if the item is a movie or TV series based on unambiguous markers.
-    
+
     Returns 'movie', 'tv', or None (never guesses).
     """
     if not text_or_metadata:
         return None
 
-    meta_lower = text_or_metadata.lower()
+    # Ignore phrases like 'film series' so franchises aren't misclassified as TV
+    sanitized = FILM_SERIES_NOISE_PATTERN.sub(" film ", text_or_metadata)
 
-    # Distinct TV markers
-    tv_markers = [
-        "tv series",
-        "television series",
-        "tv mini series",
-        "television miniseries",
-        "tv miniseries",
-        "tv show",
-        "television show",
-        "miniseries",
-        "mini-series",
-        "docuseries",
-        "sitcom",
-        "series",
-        "limited series",
-        "anthology series",
-        "animated series",
-        "anime series",
-        "مسلسل",
-        "برنامج تلفزيوني",
-        "مسلسل قصير",
-        "سلسلة تلفزيونية",
-    ]
-    for marker in tv_markers:
-        if marker in meta_lower:
-            return "tv"
+    if TV_MEDIA_PATTERN.search(sanitized):
+        return "tv"
 
-    # Distinct Movie markers
-    movie_markers = [
-        "feature film",
-        "short film",
-        "motion picture",
-        "film",
-        "movie",
-        "فيلم",
-        "شريط سينمائي",
-    ]
-    for marker in movie_markers:
-        if marker in meta_lower:
-            return "movie"
+    if MOVIE_MEDIA_PATTERN.search(sanitized):
+        return "movie"
 
-    # Return None when uncertain (zero guesswork rule)
     return None
 
 
@@ -208,78 +208,96 @@ GENRE_ARABIC = {
 }
 
 
-def export_to_csv(items: List[Dict[str, Any]], path: Any, lang: str = "en") -> None:
-    """Export items to standard CSV file format grouped by Type and Genre."""
-    import csv
-    from pathlib import Path
-    
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Sort items: Movies first, then TV series, then by primary genre, then title
+def _find_torrent_by_resolution(torrents: List[Dict[str, Any]], resolution: str) -> Optional[Dict[str, Any]]:
+    """Find first torrent matching a resolution token (e.g. '1080p', '720p')."""
+    pat = re.compile(rf"\b{re.escape(resolution)}\b", re.I)
+    return next((t for t in torrents if pat.search(str(t.get("quality", "")))), None)
+
+
+def generate_txt(items: List[Dict[str, Any]]) -> str:
+    """Return newline-separated clean titles."""
+    return "\n".join(item.get("title", "").strip() for item in items if item.get("title"))
+
+
+def generate_json(items: List[Dict[str, Any]]) -> str:
+    """Return formatted UTF-8 JSON string of extracted media items."""
+    return json.dumps(items, ensure_ascii=False, indent=2)
+
+
+def generate_csv(items: List[Dict[str, Any]], lang: str = "en") -> str:
+    """Generate CSV content grouped by Type, Primary Genre, and Title."""
     sorted_items = sorted(
         items,
         key=lambda x: (
             0 if x.get("type") != "tv" else 1,
             x.get("primary_genre") or (x.get("genres", ["Other"])[0] if x.get("genres") else "Other"),
-            x.get("title", "").lower()
-        )
+            x.get("title", "").lower(),
+        ),
     )
-    
-    with open(target, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Title", "Type", "Genres", "Year", "Rating", "Synopsis", "Synopsis_AR",
+        "TorrentURL_1080p", "MagnetLink_1080p", "TorrentURL_720p", "MagnetLink_720p",
+        "GoogleURL", "PosterURL",
+    ])
+    for item in sorted_items:
+        torrents = item.get("torrents", [])
+        t_1080 = _find_torrent_by_resolution(torrents, "1080p")
+        t_720 = _find_torrent_by_resolution(torrents, "720p")
+        if not t_1080 and torrents:
+            t_1080 = torrents[0]
+
+        item_genres = item.get("genres") or ([item.get("primary_genre")] if item.get("primary_genre") else [])
+        genres_str = ", ".join(item_genres) if item_genres else ""
+
         writer.writerow([
-            "Title", "Type", "Genres", "Year", "Rating", "Synopsis", "Synopsis_AR",
-            "TorrentURL_1080p", "MagnetLink_1080p", "TorrentURL_720p", "MagnetLink_720p",
-            "GoogleURL", "PosterURL"
+            item.get("title", ""),
+            item.get("type") or "",
+            genres_str,
+            item.get("year") or "",
+            item.get("rating") or "",
+            item.get("synopsis") or "",
+            item.get("synopsis_ar") or "",
+            t_1080.get("url") if t_1080 else "",
+            t_1080.get("magnet") if t_1080 else "",
+            t_720.get("url") if t_720 else "",
+            t_720.get("magnet") if t_720 else "",
+            item.get("url") or "",
+            item.get("poster_url") or "",
         ])
-        for item in sorted_items:
-            torrents = item.get("torrents", [])
-            t_1080 = next((t for t in torrents if t.get("quality") == "1080p"), None)
-            t_720 = next((t for t in torrents if t.get("quality") == "720p"), None)
-            if not t_1080 and torrents:
-                t_1080 = torrents[0]
+    return output.getvalue()
 
-            item_genres = item.get("genres") or ([item.get("primary_genre")] if item.get("primary_genre") else [])
-            genres_str = ", ".join(item_genres) if item_genres else ""
 
-            writer.writerow([
-                item.get("title", ""),
-                item.get("type") or "",
-                genres_str,
-                item.get("year") or "",
-                item.get("rating") or "",
-                item.get("synopsis") or "",
-                item.get("synopsis_ar") or "",
-                t_1080.get("url") if t_1080 else "",
-                t_1080.get("magnet") if t_1080 else "",
-                t_720.get("url") if t_720 else "",
-                t_720.get("magnet") if t_720 else "",
-                item.get("url") or "",
-                item.get("poster_url") or "",
-            ])
+def generate_letterboxd_csv(items: List[Dict[str, Any]]) -> str:
+    """Generate official Letterboxd watchlist import CSV content (Title, Year, URL)."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Title", "Year", "URL"])
+    for item in items:
+        writer.writerow([
+            item.get("title", ""),
+            item.get("year") or "",
+            item.get("url") or "",
+        ])
+    return output.getvalue()
+
+
+def export_to_csv(items: List[Dict[str, Any]], path: Any, lang: str = "en") -> None:
+    """Export items to standard CSV file format grouped by Type and Genre."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "w", newline="", encoding="utf-8-sig") as f:
+        f.write(generate_csv(items, lang=lang))
 
 
 def export_to_letterboxd_csv(items: List[Dict[str, Any]], path: Any) -> None:
-    """Export items to official Letterboxd watchlist import CSV format.
-    
-    Letterboxd standard headers: Title, Year, URL
-    """
-    import csv
-    from pathlib import Path
-    
+    """Export items to official Letterboxd watchlist import CSV format."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    
     with open(target, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Title", "Year", "URL"])
-        for item in items:
-            writer.writerow([
-                item.get("title", ""),
-                item.get("year") or "",
-                item.get("url") or "",
-            ])
+        f.write(generate_letterboxd_csv(items))
 
 
 def _format_markdown_item_block(item: Dict[str, Any], lang: str = "en") -> List[str]:
@@ -408,7 +426,7 @@ def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Goog
         )
     )
     for idx, item in enumerate(sorted_all, 1):
-        title = item.get("title", "")
+        title = item.get("title", "").replace("|", "\\|")
         media_type = item.get("type") or "-"
         p_genre = item.get("primary_genre") or (item.get("genres", ["-"])[0] if item.get("genres") else "-")
         year = item.get("year") or "-"
@@ -431,8 +449,6 @@ def generate_markdown(items: List[Dict[str, Any]], collection_title: str = "Goog
 
 def export_to_markdown(items: List[Dict[str, Any]], path: Any, collection_title: str = "Google Watchlist", lang: str = "en") -> None:
     """Export items to a formatted Markdown checklist organized by Type (Movies/Series) and Genre."""
-    from pathlib import Path
-    
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
