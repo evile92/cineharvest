@@ -300,6 +300,11 @@ def export_to_letterboxd_csv(items: List[Dict[str, Any]], path: Any) -> None:
         f.write(generate_letterboxd_csv(items))
 
 
+def _escape_md_link_text(text: str) -> str:
+    """Escape square brackets inside Markdown link labels so titles like '[REC]' do not break links."""
+    return text.replace("[", "\\[").replace("]", "\\]")
+
+
 def _format_markdown_item_block(item: Dict[str, Any], lang: str = "en") -> List[str]:
     """Helper to format a single item block in markdown."""
     title = item.get("title", "")
@@ -308,7 +313,7 @@ def _format_markdown_item_block(item: Dict[str, Any], lang: str = "en") -> List[
     rating_str = f" ⭐ {item['rating']}/10" if item.get("rating") else ""
     type_str = f" `[{item['type']}]`" if item.get("type") else ""
     
-    link_title = f"[{title}]({url})" if url else title
+    link_title = f"[{_escape_md_link_text(title)}]({url})" if url else title
     block = [f"- [ ] **{link_title}**{year_str}{type_str}{rating_str}"]
     
     # Synopsis in appropriate language
@@ -322,7 +327,7 @@ def _format_markdown_item_block(item: Dict[str, Any], lang: str = "en") -> List[
     if torrents:
         download_links = []
         for t in torrents[:3]:
-            q = t.get("quality", "HD")
+            q = _escape_md_link_text(str(t.get("quality", "HD")))
             size = f" ({t.get('size')})" if t.get("size") else ""
             if t.get("magnet"):
                 download_links.append(f"[🧲 Magnet {q}{size}]({t['magnet']})")

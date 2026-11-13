@@ -17,6 +17,7 @@ A robust, production-grade Python tool and web application designed to automate 
 
 - **Live Web Application (Bilingual Arabic & English):** Access anywhere at [cineharvest.streamlit.app](https://cineharvest.streamlit.app) with full RTL/LTR language toggling.
 - **Direct Movie & Series Database Search:** Instant search by title across YTS, Wikipedia, and TMDB without needing a Google Collection URL.
+- **YouTube Video & Playlist Downloader:** Download single videos or playlists in audio (MP3, M4A, WAV) or MP4 video (up to 1080p) with optional soft subtitles and playlist ZIP packaging.
 - **Bilingual Plot Synopses (Arabic & English):** Automatically fetches native Arabic synopses from Arabic Wikipedia when the app is set to Arabic, and English synopses when set to English.
 - **Random Watch Recommendation:** Shuffles the collection and suggests a movie or series to watch with full details and download links.
 - **Posters & Cards View:** Enriches every entry with official theatrical poster covers from YTS & Wikipedia REST API.
@@ -158,15 +159,20 @@ Upon completion, all datasets are exported cleanly into the `output/` directory:
 ## Project Structure
 
 ```
-google-collection-extractor/
+cineharvest/
 │
-├── main.py              # CLI entry point, argument parsing, and workflow execution
-├── extractor.py         # Playwright automation, network interception, and multi-strategy extraction
-├── cleaner.py           # Cleansing, HTML unescaping, CSV, and Markdown exporters
-├── tmdb.py              # Optional TMDB metadata enrichment module
-├── config.py            # Global constants, default timeouts, and path definitions
-├── requirements.txt     # Python package requirements
-├── README.md            # Documentation and usage guide
+├── app.py                 # Streamlit web application (Collection Extractor, Direct Search & YouTube Downloader)
+├── main.py                # CLI entry point, argument parsing, and workflow execution
+├── extractor.py           # Playwright automation, network interception, pagination, and multi-strategy extraction
+├── cleaner.py             # Cleansing, HTML unescaping, CSV, Letterboxd, and Markdown exporters
+├── media_enricher.py      # YTS/EZTV torrent fetching and bilingual Wikipedia/IMDb enrichment
+├── youtube_downloader.py  # yt-dlp + FFmpeg engine for single videos, playlists, and ZIP archives
+├── tmdb.py                # Optional TMDB metadata enrichment module
+├── config.py              # Global constants, default timeouts, and path definitions
+├── requirements.txt       # Python package requirements
+├── packages.txt           # System dependencies for Streamlit Cloud (Chromium libs, FFmpeg, Node.js)
+├── assets/                # Brand logo and static assets (`logo.png`)
+├── README.md              # Documentation and usage guide
 │
 ├── output/              # Extracted datasets
 │   ├── movies_and_series.txt        # Plain text list
